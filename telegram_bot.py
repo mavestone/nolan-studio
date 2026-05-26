@@ -40,6 +40,9 @@ _active_project: dict[int, int] = {}
 _app: Application | None = None
 _settings_loader = None      # callable returning current settings dict
 
+# Chats currently waiting for user to type their custom instructions
+_waiting_instructions: set[int] = set()
+
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -58,6 +61,29 @@ async def _get_active(chat_id: int) -> int | None:
     if chat_id in _active_project:
         return _active_project[chat_id]
     return _default_project_id()
+
+
+# ── Custom instructions per chat ─────────────────────────────────────────
+
+def _get_instructions(chat_id: int) -> str:
+    """Return the custom instructions saved for this chat (empty string if none)."""
+    s = _settings_loader() if _settings_loader else {}
+    return (s.get("telegram_instructions") or {}).get(str(chat_id), "")
+
+
+def _save_instructions(chat_id: int, text: str | None) -> None:
+    """Persist custom instructions for a chat to settings.json."""
+    from pathlib import Path as _Path
+    import json as _json
+    settings_path = _Path("settings.json")
+    data = _json.loads(settings_path.read_text()) if settings_path.exists() else {}
+    instructions = data.get("telegram_instructions") or {}
+    if text:
+        instructions[str(chat_id)] = text
+    else:
+        instructions.pop(str(chat_id), None)
+    data["telegram_instructions"] = instructions
+    settings_path.write_text(_json.dumps(data, indent=2))
 
 
 # ── Lean transcript-only chat (fast path for Telegram) ───────────────────
@@ -266,6 +292,12 @@ async def chat_transcripts_only(project_id: int, user_message: str,
         "  <i>Cut: 2:18 → 2:31, ~13s</i>\n"
         "• Empty line between sections. Tight prose. ~300 words max."
     )
+
+    # Append any custom instructions the user has set for this chat
+    custom = _get_instructions(chat_id)
+    if custom:
+        system += f"\n\nCUSTOM INSTRUCTIONS FROM THE EDITOR:\n{custom}"
+
     prompt = (
         f"Project: {project['name']}\n\n"
         f"USER ASKS: {user_message}\n\n"
@@ -386,6 +418,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "*Search & utility*\n"
         "/search `<q>` — transcript matches\n"
         "/scenes `<q>` — shot/setting search (closeup, desert, …)\n"
+        "/instructions — set custom style/focus rules for AI responses\n"
         "/projects · /use `<id>` · /stats · /model `<name>`\n\n"
         "_Or just send a question — I'll search the transcripts and answer in seconds._"
     )
@@ -550,7 +583,7 @@ async def cmd_model(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def _broad_project_analysis(pid: int, focus: str, model: str = "haiku") -> str:
+async def _broad_project_analysis(pid: int, focus: str, model: str = "haiku", chat_id: int | None = None) -> str:
     """
     Give the LLM a sweeping view of all transcripts (sampled) and ask for a
     focused breakdown — story, characters, themes, etc. Used by /story, /chars,
@@ -629,6 +662,11 @@ async def _broad_project_analysis(pid: int, focus: str, model: str = "haiku") ->
         "<code>inline</code>, <blockquote>quotes</blockquote>. No markdown asterisks. "
         "Always cite using <code>[FILENAME.MP4]</code>."
     )
+    if chat_id:
+        custom = _get_instructions(chat_id)
+        if custom:
+            system += f"\n\nCUSTOM INSTRUCTIONS FROM THE EDITOR:\n{custom}"
+
     prompt = (
         f"Project: {project['name']}\n\n"
         f"Below are transcript excerpts from {len(snippets)} clips ("
@@ -674,6 +712,64 @@ async def cmd_locations(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await _run_broad_command(update, ctx, "locations")
 
 
+async def cmd_instructions(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    /instructions          — show current instructions + Edit / Clear buttons
+    /instructions <text>   — set instructions immediately (inline shortcut)
+    /instructions clear    — clear instructions immediately
+    """
+    chat_id = update.effective_chat.id
+    if not _allowed(chat_id):
+        return
+
+    args = " ".join(ctx.args or "").strip() if ctx.args else ""
+
+    # Inline clear shortcut
+    if args.lower() == "clear":
+        _save_instructions(chat_id, None)
+        await update.message.reply_text("🗑️ Custom instructions cleared.", parse_mode=ParseMode.HTML)
+        return
+
+    # Inline set shortcut — /instructions <anything else>
+    if args:
+        _save_instructions(chat_id, args)
+        preview = args[:200] + ("…" if len(args) > 200 else "")
+        await update.message.reply_text(
+            f"✅ <b>Custom instructions saved:</b>\n\n<i>{_escape_html(preview)}</i>\n\n"
+            "These will shape every AI response in this chat.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    # Show current instructions with Edit / Clear inline buttons
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    current = _get_instructions(chat_id)
+    if current:
+        body = (
+            f"📋 <b>Your current instructions:</b>\n\n"
+            f"<blockquote>{_escape_html(current)}</blockquote>\n\n"
+            "These are added to every AI prompt in this chat."
+        )
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✏️ Edit", callback_data="instr_edit"),
+            InlineKeyboardButton("🗑️ Clear", callback_data="instr_clear"),
+        ]])
+    else:
+        body = (
+            "📋 <b>No custom instructions set.</b>\n\n"
+            "Instructions let you shape how Nolan responds — e.g.:\n"
+            '<i>"Focus on emotional moments. Prefer short snappy clips. '
+            'This is a wedding film so look for tears, laughter, vows."</i>\n\n'
+            "Tap <b>Add instructions</b> or send:\n"
+            "<code>/instructions Your text here</code>"
+        )
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✏️ Add instructions", callback_data="instr_edit"),
+        ]])
+
+    await update.message.reply_text(body, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+
+
 async def _run_broad_command(update, ctx, focus: str):
     chat_id = update.effective_chat.id
     if not _allowed(chat_id):
@@ -691,7 +787,7 @@ async def _run_broad_command(update, ctx, focus: str):
     await ctx.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
     keep_typing = asyncio.create_task(_keep_typing(ctx, chat_id))
     try:
-        reply = await _broad_project_analysis(pid, focus, model=model)
+        reply = await _broad_project_analysis(pid, focus, model=model, chat_id=chat_id)
     except Exception as e:
         log.exception("broad analysis failed")
         await update.message.reply_text(f"⚠️ Error: {e}")
@@ -1163,6 +1259,22 @@ async def on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if not text:
             return
 
+        # ── Custom-instructions capture mode ─────────────────────────────
+        # If the user tapped "Edit" in /instructions, the next free-text
+        # message they send becomes their new instructions.
+        if chat_id in _waiting_instructions:
+            _waiting_instructions.discard(chat_id)
+            _save_instructions(chat_id, text)
+            preview = text[:200] + ("…" if len(text) > 200 else "")
+            await update.message.reply_text(
+                f"✅ <b>Instructions saved!</b>\n\n"
+                f"<blockquote>{_escape_html(preview)}</blockquote>\n\n"
+                "Every AI response in this chat will follow these. "
+                "Use /instructions to view or change them.",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
         # Block AI in offline mode
         s = _settings_loader() if _settings_loader else {}
         if s.get("offline_mode"):
@@ -1262,6 +1374,30 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     data = query.data or ""
+
+    # ── Custom instructions callbacks ─────────────────────────────────────
+    if data == "instr_edit":
+        _waiting_instructions.add(query.from_user.id)
+        await query.answer()
+        await query.message.reply_text(
+            "✏️ <b>Type your new instructions</b> and send them as a message.\n\n"
+            "<i>Example: Focus on emotional moments. Short snappy clips only. "
+            "This is a wedding film — look for tears, laughter, vows.</i>\n\n"
+            "Send /instructions to cancel.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    if data == "instr_clear":
+        _save_instructions(query.from_user.id, None)
+        await query.answer("Instructions cleared ✓")
+        await query.edit_message_text(
+            "🗑️ Custom instructions cleared. Nolan will use its default style.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    # ── Finder reveal callbacks ───────────────────────────────────────────
     if data.startswith("open:"):
         try:
             file_id = int(data.split(":", 1)[1])
@@ -1380,19 +1516,20 @@ async def run_telegram_bot(token: str, settings_loader):
     _settings_loader = settings_loader
 
     _app = ApplicationBuilder().token(token).build()
-    _app.add_handler(CommandHandler("start",    cmd_start))
-    _app.add_handler(CommandHandler("projects", cmd_projects))
-    _app.add_handler(CommandHandler("use",      cmd_use))
-    _app.add_handler(CommandHandler("search",   cmd_search))
-    _app.add_handler(CommandHandler("scenes",   cmd_scenes))
-    _app.add_handler(CommandHandler("stats",    cmd_stats))
-    _app.add_handler(CommandHandler("model",    cmd_model))
-    _app.add_handler(CommandHandler("story",     cmd_story))
-    _app.add_handler(CommandHandler("characters", cmd_characters))
-    _app.add_handler(CommandHandler("chars",     cmd_characters))
-    _app.add_handler(CommandHandler("themes",    cmd_themes))
-    _app.add_handler(CommandHandler("summary",   cmd_summary))
-    _app.add_handler(CommandHandler("locations", cmd_locations))
+    _app.add_handler(CommandHandler("start",        cmd_start))
+    _app.add_handler(CommandHandler("projects",     cmd_projects))
+    _app.add_handler(CommandHandler("use",          cmd_use))
+    _app.add_handler(CommandHandler("search",       cmd_search))
+    _app.add_handler(CommandHandler("scenes",       cmd_scenes))
+    _app.add_handler(CommandHandler("stats",        cmd_stats))
+    _app.add_handler(CommandHandler("model",        cmd_model))
+    _app.add_handler(CommandHandler("story",        cmd_story))
+    _app.add_handler(CommandHandler("characters",   cmd_characters))
+    _app.add_handler(CommandHandler("chars",        cmd_characters))
+    _app.add_handler(CommandHandler("themes",       cmd_themes))
+    _app.add_handler(CommandHandler("summary",      cmd_summary))
+    _app.add_handler(CommandHandler("locations",    cmd_locations))
+    _app.add_handler(CommandHandler("instructions", cmd_instructions))
     _app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     _app.add_handler(CallbackQueryHandler(on_callback))
 
