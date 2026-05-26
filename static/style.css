@@ -555,6 +555,31 @@ html, body {
 /* Hide old delete button if it was outside the toolbar */
 .project-card-delete:not(.project-card-iconbtn) { display: none; }
 
+/* ── Toolbar Telegram quick-launch ── */
+.toolbar-telegram-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(42,171,238,0.12);
+  border: 1px solid rgba(42,171,238,0.4);
+  color: #5fc1f0;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  text-decoration: none;
+  transition: all var(--t-fast);
+  white-space: nowrap;
+}
+.toolbar-telegram-btn:hover {
+  background: rgba(42,171,238,0.22);
+  border-color: #2AABEE;
+  color: #fff;
+  transform: translateY(-1px);
+}
+
 /* ── Settings cog button ── */
 .settings-cog {
   background: var(--bg3);

@@ -48,6 +48,18 @@ async function loadAppSettings() {
     offlineMode     = s.offline_mode;
     claudeAvailable = s.claude_available;
     applyOfflineMode();
+
+    // Telegram bot quick-launch — only show if bot is configured
+    const tgBtn = document.getElementById('toolbar-telegram-btn');
+    const tgLbl = document.getElementById('toolbar-telegram-label');
+    if (tgBtn && s.telegram_url && s.telegram_bot_username) {
+      tgBtn.href = s.telegram_url;
+      tgBtn.style.display = 'inline-flex';
+      if (tgLbl) tgLbl.textContent = `@${s.telegram_bot_username}`;
+      tgBtn.title = `Open ${s.telegram_bot_username} in Telegram`;
+    } else if (tgBtn) {
+      tgBtn.style.display = 'none';
+    }
   } catch (_) {}
 }
 
