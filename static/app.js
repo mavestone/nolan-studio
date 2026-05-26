@@ -367,29 +367,49 @@ async function saveTelegramSettings() {
 }
 
 async function updateFromGithub() {
-  if (!confirm('Pull the latest version from GitHub?\n\nLocal modifications will be discarded. After update, the server will need a restart for the changes to take effect.')) return;
+  if (!confirm('Pull the latest version from GitHub?\n\nNolan will restart automatically — this page will reload when it\'s back.')) return;
   const btn = document.getElementById('settings-update-btn');
+  const spinner = '<svg width="11" height="11" viewBox="0 0 11 11" fill="none" style="margin-right:5px;animation:spin 1s linear infinite"><circle cx="5.5" cy="5.5" r="4" stroke="currentColor" stroke-width="1.4" stroke-dasharray="18" stroke-dashoffset="6"/></svg>';
   const original = btn.innerHTML;
   btn.disabled = true;
-  btn.innerHTML = '<svg width="11" height="11" viewBox="0 0 11 11" fill="none" style="margin-right:5px;animation:spin 1s linear infinite"><circle cx="5.5" cy="5.5" r="4" stroke="currentColor" stroke-width="1.4" stroke-dasharray="18" stroke-dashoffset="6"/></svg>Updating…';
+  btn.innerHTML = spinner + 'Updating…';
   try {
     const res = await apiFetch('/api/admin/update', 'POST', {});
-    btn.innerHTML = original;
-    btn.disabled = false;
+
     if (res.old_commit === res.new_commit) {
+      btn.innerHTML = original;
+      btn.disabled = false;
       flashSettingsStatus(`✓ Already up to date · ${res.new_commit}`, 'ok');
       return;
     }
-    flashSettingsStatus(`✓ Updated ${res.old_commit} → ${res.new_commit} · "${res.new_message}"`, 'ok');
-    // Reload version display
-    loadVersionInfo();
-    if (res.restart_required) {
-      setTimeout(() => {
-        alert(
-          `Updated to ${res.new_commit} — "${res.new_message}"\n\n` +
-          `Quit Terminal (Cmd+Q) and re-open Nolan from /Applications to load the new code.`
-        );
-      }, 600);
+
+    // Server is restarting — poll until it comes back, then reload
+    btn.innerHTML = spinner + 'Restarting…';
+    flashSettingsStatus(`✓ Updated ${res.old_commit} → ${res.new_commit} · "${res.new_message}" — restarting…`, 'ok');
+
+    // Wait for server to go down (give SIGTERM time to propagate)
+    await new Promise(r => setTimeout(r, 4000));
+
+    // Poll until the server responds again (up to ~60 s)
+    let came_back = false;
+    for (let i = 0; i < 30; i++) {
+      try {
+        await fetch('/api/admin/version', { signal: AbortSignal.timeout(2000) });
+        came_back = true;
+        break;
+      } catch (_) {
+        await new Promise(r => setTimeout(r, 2000));
+      }
+    }
+
+    if (came_back) {
+      flashSettingsStatus('✓ Nolan restarted — reloading…', 'ok');
+      await new Promise(r => setTimeout(r, 600));
+      location.reload();
+    } else {
+      btn.innerHTML = original;
+      btn.disabled = false;
+      flashSettingsStatus('Updated but restart timed out — please quit and reopen Nolan manually', 'err');
     }
   } catch (e) {
     flashSettingsStatus('Update failed: ' + e.message, 'err');

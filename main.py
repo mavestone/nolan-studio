@@ -823,45 +823,77 @@ async def admin_version():
 @app.post("/api/admin/update")
 async def admin_update():
     """
-    Pull latest from GitHub origin/main and rebuild the .app.
-    Requires the source to be a git checkout. Returns the new commit info;
-    user must restart the server for code changes to take effect.
+    Pull latest from GitHub origin/main, rebuild the .app, bump deps,
+    then automatically restart the whole application:
+      1. Spawn a detached 'open -a Nolan' delayed 6s
+      2. Send SIGTERM to this process → uvicorn shuts down gracefully
+         → Swift launcher sees server exit → quits the .app
+      3. 6s later the detached helper reopens Nolan fresh
+    The frontend polls until the server is back, then reloads itself.
     """
     import subprocess as _sub
+    import signal as _signal
     root = str(Path(__file__).resolve().parent)
 
     if not (Path(root) / ".git").is_dir():
         raise HTTPException(400, "Not a git checkout — cannot auto-update.")
 
-    def _run(*args, check=True):
+    def _run(*args):
         return _sub.check_output(args, cwd=root, stderr=_sub.STDOUT).decode()
 
     try:
         old = _sub.check_output(["git", "-C", root, "rev-parse", "--short", "HEAD"]).decode().strip()
         _run("git", "-C", root, "fetch", "--quiet", "origin", "main")
-        # Hard-update to origin/main — wipes local-only edits, which is what we want for an "update from GitHub" button
+        # Hard-reset to origin/main
         _run("git", "-C", root, "reset", "--hard", "origin/main")
         new = _sub.check_output(["git", "-C", root, "rev-parse", "--short", "HEAD"]).decode().strip()
         new_msg = _sub.check_output(["git", "-C", root, "log", "-1", "--format=%s"]).decode().strip()
-        # Rebuild the .app bundle so the launcher script reflects any changes
+
+        # Rebuild the .app bundle
         try:
             target = "/Applications" if Path("/Applications/Nolan.app").is_dir() else str(Path.home() / "Applications")
-            _sub.run(["bash", str(Path(root) / "make-app.sh"), target], cwd=root, check=False, stdout=_sub.DEVNULL, stderr=_sub.DEVNULL)
+            _sub.run(["bash", str(Path(root) / "make-app.sh"), target],
+                     cwd=root, check=False, stdout=_sub.DEVNULL, stderr=_sub.DEVNULL)
         except Exception:
             pass
+
         # Bump Python deps if requirements.txt changed
         try:
             venv_pip = Path(root) / ".venv" / "bin" / "pip"
             if venv_pip.exists():
-                _sub.run([str(venv_pip), "install", "-r", str(Path(root) / "requirements.txt"), "--quiet"], cwd=root, check=False)
+                _sub.run([str(venv_pip), "install", "-r", str(Path(root) / "requirements.txt"), "--quiet"],
+                         cwd=root, check=False)
         except Exception:
             pass
+
+        # ── Auto-restart ──────────────────────────────────────────────────
+        # Spawn a detached helper that waits for us to quit, then re-opens
+        # the .app. We give 6 s so the Swift launcher has time to detect the
+        # server exit and fully quit before `open -a Nolan` runs.
+        app_name = "Nolan"
+        _sub.Popen(
+            ["bash", "-c", f"sleep 6 && open -a '{app_name}'"],
+            start_new_session=True,
+            close_fds=True,
+            stdout=_sub.DEVNULL,
+            stderr=_sub.DEVNULL,
+        )
+        log.info("Update complete — scheduling server shutdown for auto-restart")
+
+        # Schedule graceful shutdown after the HTTP response is delivered
+        async def _shutdown():
+            await asyncio.sleep(1.2)
+            os.kill(os.getpid(), _signal.SIGTERM)
+
+        asyncio.create_task(_shutdown())
+
         return {
             "ok": True,
             "old_commit": old,
             "new_commit": new,
             "new_message": new_msg,
             "restart_required": old != new,
+            "restarting": True,
         }
     except _sub.CalledProcessError as e:
         raise HTTPException(500, f"Update failed: {e.output.decode()[-300:] if e.output else e}")
