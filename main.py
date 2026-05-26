@@ -596,16 +596,11 @@ async def api_delete_project(project_id: int):
 
 @app.get("/api/pick-folder")
 async def pick_folder():
-    # Use osascript (always available on macOS) instead of tkinter which
-    # is NOT bundled with Homebrew Python and silently fails on many installs.
-    applescript = (
-        'tell application "Finder"\n'
-        '    activate\n'
-        '    set folderRef to choose folder with prompt "Select footage folder"\n'
-        '    set folderPath to POSIX path of folderRef\n'
-        'end tell\n'
-        'return folderPath'
-    )
+    # `choose folder` is a StandardAdditions command — no Finder automation
+    # permission required, works on every Mac out of the box.
+    # (The old `tell application "Finder"` form requires an explicit
+    #  Automation permission grant which new Macs haven't approved.)
+    applescript = 'POSIX path of (choose folder with prompt "Select footage folder")'
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(
         None,
@@ -616,7 +611,12 @@ async def pick_folder():
     )
     path = result.stdout.strip()
     if not path:
-        raise HTTPException(400, "No folder selected")
+        err = result.stderr.strip()
+        # User cancelled → -128 is the AppleScript "user cancelled" error
+        if not err or "-128" in err:
+            raise HTTPException(400, "No folder selected")
+        log.warning(f"pick-folder osascript error: {err}")
+        raise HTTPException(500, f"Folder picker failed: {err}")
     # osascript returns paths with trailing slash — normalise
     return {"path": path.rstrip("/")}
 

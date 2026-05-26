@@ -700,7 +700,11 @@ async function addFolder() {
     await apiFetch(`/api/projects/${currentProjectId}/folders`, 'POST', { path: res.path });
     await loadBins();
   } catch (e) {
-    if (e.message !== 'No folder selected') alert('Could not add folder: ' + e.message);
+    // -128 / "No folder selected" = user cancelled the picker — stay silent
+    const msg = e.message || '';
+    if (!msg.includes('No folder selected') && !msg.includes('-128')) {
+      alert('Could not open folder picker:\n\n' + msg + '\n\nTry restarting Nolan.');
+    }
   }
 }
 
