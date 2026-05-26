@@ -62,12 +62,18 @@ $NEED_SUDO tee "$APP/Contents/Info.plist" >/dev/null <<EOF
 EOF
 
 # ── Launcher script ──
-# Points to the repo where Python + venv live. The .app stays small.
+# Stays attached to python3 so macOS shows the running-dot under Nolan in the Dock.
+# Quitting via Dock right-click → Quit (or Cmd+Q after focusing the app) cleanly
+# kills the Python server.
 $NEED_SUDO tee "$APP/Contents/MacOS/Nolan" >/dev/null <<EOF
 #!/bin/bash
-# Nolan launcher — starts the FastAPI server then opens the browser.
+# Nolan launcher
 
 NOLAN_ROOT="$ROOT"
+LOG_DIR="\$HOME/Library/Logs/Nolan"
+LOG_FILE="\$LOG_DIR/server.log"
+
+mkdir -p "\$LOG_DIR"
 
 if [ ! -d "\$NOLAN_ROOT" ]; then
     osascript -e 'display dialog "Nolan source folder is missing at:\n\n$ROOT\n\nRe-run install.sh from the repo." buttons {"OK"} default button 1 with icon stop'
@@ -89,23 +95,33 @@ if [ -f ".venv/bin/activate" ]; then
     source .venv/bin/activate
 fi
 
-# Open Nolan in a Terminal window so logs are visible + user can Cmd+Q to quit
-osascript <<APPLESCRIPT 2>/dev/null
-tell application "Terminal"
-    activate
-    set w to do script "cd '\$NOLAN_ROOT' && [ -f .venv/bin/activate ] && source .venv/bin/activate; python3 main.py"
-    set custom title of w to "Nolan"
-end tell
-APPLESCRIPT
+# Rotate log
+[ -f "\$LOG_FILE" ] && mv "\$LOG_FILE" "\$LOG_FILE.prev"
 
-# Wait for the server to boot, then open the browser
-for _ in 1 2 3 4 5 6 7 8 9 10; do
+# Start the server in background, log to file. Capture PID.
+python3 main.py >"\$LOG_FILE" 2>&1 &
+SERVER_PID=\$!
+
+# Ensure python is killed when the launcher quits (Cmd+Q on the app, etc.)
+trap 'kill \$SERVER_PID 2>/dev/null; wait \$SERVER_PID 2>/dev/null; exit 0' SIGTERM SIGINT EXIT
+
+# Wait for the server to become reachable, then open the browser
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
     if curl -sf http://localhost:8765/ >/dev/null 2>&1; then
         break
     fi
-    sleep 0.8
+    if ! kill -0 \$SERVER_PID 2>/dev/null; then
+        # Server died — show last few log lines and bail
+        osascript -e "display dialog \"Nolan failed to start. See \$LOG_FILE for details.\" buttons {\"OK\"} default button 1 with icon stop"
+        exit 1
+    fi
+    sleep 0.7
 done
 open "http://localhost:8765/"
+
+# Stay attached — this is what gives Nolan the 'running dot' in the Dock.
+# Block on the python child; exit when it does.
+wait \$SERVER_PID
 EOF
 
 $NEED_SUDO chmod +x "$APP/Contents/MacOS/Nolan"
