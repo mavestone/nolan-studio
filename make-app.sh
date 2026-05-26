@@ -89,17 +89,45 @@ if [ -n "\$EXISTING" ]; then
     sleep 0.5
 fi
 
-# Activate venv if present
-if [ -f ".venv/bin/activate" ]; then
-    # shellcheck source=/dev/null
-    source .venv/bin/activate
+# .app launches have a minimal PATH — add the usual Homebrew & Python locations
+export PATH="/usr/local/bin:/opt/homebrew/bin:/Library/Frameworks/Python.framework/Versions/3.11/bin:/Library/Frameworks/Python.framework/Versions/3.12/bin:\$PATH"
+
+# Find a Python that has our deps. Order:
+#   1. project venv (.venv/bin/python3)
+#   2. Framework Python 3.11/3.12 (typical brew/python.org)
+#   3. /opt/homebrew/bin/python3 (Apple Silicon brew)
+#   4. /usr/local/bin/python3 (Intel brew)
+#   5. whatever python3 is on PATH
+PYTHON_CANDIDATES=(
+    "\$NOLAN_ROOT/.venv/bin/python3"
+    "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3"
+    "/Library/Frameworks/Python.framework/Versions/3.11/bin/python3"
+    "/opt/homebrew/bin/python3"
+    "/usr/local/bin/python3"
+    "\$(command -v python3)"
+)
+PYTHON_BIN=""
+for cand in "\${PYTHON_CANDIDATES[@]}"; do
+    if [ -x "\$cand" ] && "\$cand" -c "import dotenv, fastapi, faster_whisper" >/dev/null 2>&1; then
+        PYTHON_BIN="\$cand"
+        break
+    fi
+done
+
+if [ -z "\$PYTHON_BIN" ]; then
+    osascript -e 'display dialog "Nolan needs Python with its dependencies installed.\n\nOpen Terminal and run:\n\n  cd '"\$NOLAN_ROOT"' && ./install.sh\n\nThen relaunch Nolan." buttons {"OK"} default button 1 with icon stop'
+    exit 1
 fi
 
 # Rotate log
 [ -f "\$LOG_FILE" ] && mv "\$LOG_FILE" "\$LOG_FILE.prev"
 
+# Record which Python we're using (helps debugging)
+echo "Nolan launcher using: \$PYTHON_BIN" >"\$LOG_FILE"
+echo "──────────────────────────────────" >>"\$LOG_FILE"
+
 # Start the server in background, log to file. Capture PID.
-python3 main.py >"\$LOG_FILE" 2>&1 &
+"\$PYTHON_BIN" main.py >>"\$LOG_FILE" 2>&1 &
 SERVER_PID=\$!
 
 # Ensure python is killed when the launcher quits (Cmd+Q on the app, etc.)
