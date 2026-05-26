@@ -34,8 +34,22 @@ The script:
 4. Creates a blank `.env`
 5. Drops a `Nolan.app` on your Desktop
 
-Double-click `Nolan.app` → the first-run wizard walks you through API keys, the
-optional Telegram bot, and your first project.
+The installer asks where to put `Nolan.app`:
+
+- **`/Applications`** *(recommended)* — Nolan shows up in Launchpad and Spotlight, just like any
+  other Mac app
+- `~/Applications` — per-user install, no sudo
+- `~/Desktop` — quick access
+- Skip if you'd rather start from Terminal
+
+Open Nolan from Spotlight (`⌘+Space → "Nolan"`) → the first-run wizard walks you
+through API keys, the optional Telegram bot, and your first project.
+
+If you ever want to rebuild the `.app` (e.g. moved the repo to a new path):
+
+```bash
+./make-app.sh /Applications   # or ~/Desktop, ~/Applications, etc.
+```
 
 ## Optional API keys
 

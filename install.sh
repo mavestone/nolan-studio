@@ -84,40 +84,30 @@ else
     ok ".env preserved"
 fi
 
-# ── 8. Build the Desktop launcher (.app) ────────────────────────────
-LAUNCHER="$HOME/Desktop/Nolan.app"
-if [[ ! -d "$LAUNCHER" ]]; then
-    say "Creating Desktop launcher…"
-    mkdir -p "$LAUNCHER/Contents/MacOS"
-    cat > "$LAUNCHER/Contents/Info.plist" <<'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>CFBundleExecutable</key><string>Nolan</string>
-  <key>CFBundleIdentifier</key><string>studio.nolan</string>
-  <key>CFBundleName</key><string>Nolan</string>
-  <key>LSUIElement</key><false/>
-</dict></plist>
-EOF
-    cat > "$LAUNCHER/Contents/MacOS/Nolan" <<EOF
-#!/bin/bash
-cd "$ROOT"
-lsof -ti :8765 | xargs kill -9 2>/dev/null
-sleep 0.5
-osascript <<APPLESCRIPT
-tell application "Terminal"
-    activate
-    set w to do script "cd '$ROOT' && source .venv/bin/activate && python3 main.py"
-    set custom title of w to "Nolan"
-end tell
-APPLESCRIPT
-sleep 3
-open http://localhost:8765/
-EOF
-    chmod +x "$LAUNCHER/Contents/MacOS/Nolan"
-    ok "Launcher: $LAUNCHER"
+# ── 8. Build & install Nolan.app ────────────────────────────────────
+echo
+echo "${BOLD}Where would you like Nolan.app installed?${RESET}"
+echo "  1) /Applications        ${YELLOW}(recommended — shows up in Launchpad & Spotlight)${RESET}"
+echo "  2) ~/Applications       (per-user, no sudo)"
+echo "  3) ~/Desktop"
+echo "  4) Skip — I'll run from Terminal"
+read -p "  Choose [1-4, default 1]: " CHOICE
+CHOICE="${CHOICE:-1}"
+
+case "$CHOICE" in
+    1) INSTALL_DIR="/Applications" ;;
+    2) INSTALL_DIR="$HOME/Applications" ;;
+    3) INSTALL_DIR="$HOME/Desktop" ;;
+    4) INSTALL_DIR="" ;;
+    *) INSTALL_DIR="/Applications" ;;
+esac
+
+if [[ -n "$INSTALL_DIR" ]]; then
+    mkdir -p "$INSTALL_DIR" 2>/dev/null || true
+    bash "$ROOT/make-app.sh" "$INSTALL_DIR"
+    ok "Installed: $INSTALL_DIR/Nolan.app"
 else
-    ok "Launcher already exists"
+    say "Skipped — start manually with: cd $ROOT && source .venv/bin/activate && python3 main.py"
 fi
 
 # ── 9. Done ──────────────────────────────────────────────────────────
@@ -125,8 +115,14 @@ echo
 echo "${BOLD}${GREEN}Nolan is installed.${RESET}"
 echo
 echo "Next steps:"
-echo "  1. Double-click ${BOLD}Nolan.app${RESET} on your Desktop."
-echo "  2. The first-run wizard will walk you through API keys + project setup."
+if [[ -n "$INSTALL_DIR" ]]; then
+    if [[ "$INSTALL_DIR" == "/Applications" ]] || [[ "$INSTALL_DIR" == "$HOME/Applications" ]]; then
+        echo "  1. Open ${BOLD}Launchpad${RESET} or ${BOLD}Spotlight (⌘+Space)${RESET} and search 'Nolan'."
+    else
+        echo "  1. Double-click ${BOLD}Nolan${RESET} on your Desktop."
+    fi
+    echo "  2. The first-run wizard walks you through API keys + your first project."
+fi
 echo "  3. You can also import a project from a friend via the ${BOLD}Import${RESET} button."
 echo
 echo "Manual start: ${CYAN}cd $ROOT && source .venv/bin/activate && python3 main.py${RESET}"
