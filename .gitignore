@@ -1,0 +1,28 @@
+# Secrets
+.env
+settings.json
+
+# Generated data
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+narrative_cuts/
+transcript_exports/
+static/thumbnails/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
+._*
+
+# Editor
+.vscode/
+.idea/
+.env.example
+Nolan.command
+.claude/

@@ -1,0 +1,31 @@
+# Nolan Studio — Python dependencies
+# Tested with Python 3.11
+
+# Web framework
+fastapi==0.115.12
+uvicorn[standard]==0.34.2
+starlette==0.46.2
+python-multipart==0.0.22
+
+# Database
+aiosqlite==0.22.1
+
+# Transcription (local Whisper)
+faster-whisper==1.2.1
+av==17.0.1
+
+# Scene detection
+scenedetect[opencv]==0.7
+opencv-python-headless==4.13.0.92
+numpy<2.0
+
+# AI providers
+anthropic==0.97.0
+groq==1.2.0
+google-genai==1.74.0
+
+# Telegram bot
+python-telegram-bot[job-queue]==22.7
+
+# Env config
+python-dotenv==1.1.0
