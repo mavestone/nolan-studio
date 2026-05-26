@@ -43,6 +43,15 @@ _settings_loader = None      # callable returning current settings dict
 # Chats currently waiting for user to type their custom instructions
 _waiting_instructions: set[int] = set()
 
+# Chats currently waiting for user to type a footage folder path for relinking
+_waiting_relink: set[int] = set()
+
+
+def _clear_waiting(chat_id: int) -> None:
+    """Cancel any pending capture-mode state for this chat."""
+    _waiting_instructions.discard(chat_id)
+    _waiting_relink.discard(chat_id)
+
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -371,6 +380,7 @@ async def chat_transcripts_only(project_id: int, user_message: str,
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
+    _clear_waiting(chat_id)
 
     # ── Auto-register first user ──────────────────────────────────────────
     # If NO chat IDs are configured yet, the first person to /start is almost
@@ -418,6 +428,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "*Search & utility*\n"
         "/search `<q>` — transcript matches\n"
         "/scenes `<q>` — shot/setting search (closeup, desert, …)\n"
+        "/relink — relink footage paths on this machine\n"
         "/instructions — set custom style/focus rules for AI responses\n"
         "/projects · /use `<id>` · /stats · /model `<name>`\n\n"
         "_Or just send a question — I'll search the transcripts and answer in seconds._"
@@ -426,6 +437,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_projects(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    _clear_waiting(update.effective_chat.id)
     if not _allowed(update.effective_chat.id):
         return
     from database import get_projects
@@ -443,6 +455,7 @@ async def cmd_projects(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_use(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
+    _clear_waiting(chat_id)
     if not _allowed(chat_id):
         return
     if not ctx.args:
@@ -768,6 +781,110 @@ async def cmd_instructions(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ]])
 
     await update.message.reply_text(body, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+
+
+async def cmd_relink(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    /relink              — show current missing-file count + ask for folder path
+    /relink /path/to/dir — relink immediately with that path
+    """
+    chat_id = update.effective_chat.id
+    _clear_waiting(chat_id)
+    if not _allowed(chat_id):
+        return
+
+    pid = await _get_active(chat_id)
+    if not pid:
+        await update.message.reply_text("Pick a project first: /use <id>")
+        return
+
+    from database import get_project_files, get_project
+    project = await get_project(pid)
+    files   = await get_project_files(pid)
+    missing = [f for f in files if not Path(f["path"]).exists()]
+
+    args = " ".join(ctx.args or "").strip() if ctx.args else ""
+
+    # Inline: /relink /some/path
+    if args:
+        await _do_relink(update, pid, args, project["name"])
+        return
+
+    # Show stats + prompt
+    if not missing:
+        await update.message.reply_text(
+            f"✅ All <b>{len(files)}</b> clips found on disk — nothing to relink.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    _waiting_relink.add(chat_id)
+    await update.message.reply_text(
+        f"📂 <b>Relink footage — {project['name']}</b>\n\n"
+        f"<b>{len(missing)}</b> of <b>{len(files)}</b> clips are missing from disk.\n\n"
+        "Reply with the <b>full folder path</b> where your MP4s live and Nolan "
+        "will walk it and match by filename.\n\n"
+        "<i>Example:</i>\n<code>/Volumes/SanDisk/SandsOfTruth</code>\n\n"
+        "Send /relink to cancel.",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def _do_relink(update, pid: int, footage_root: str, project_name: str):
+    """Walk footage_root, match basenames, update DB. Send result."""
+    footage_root = footage_root.strip().rstrip("/")
+    if not Path(footage_root).is_dir():
+        await update.message.reply_text(
+            f"❌ Folder not found:\n<code>{_escape_html(footage_root)}</code>\n\n"
+            "Check the path and try again.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    await update.message.reply_text(
+        f"🔍 Scanning <code>{_escape_html(footage_root)}</code>…",
+        parse_mode=ParseMode.HTML,
+    )
+
+    try:
+        # Call the shared relink helper via HTTP to stay in the event loop
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"http://localhost:8765/api/projects/{pid}/relink",
+                json={"footage_root": footage_root},
+                timeout=aiohttp.ClientTimeout(total=60),
+            ) as resp:
+                result = await resp.json()
+        if not resp.ok:
+            raise RuntimeError(result.get("detail", "Unknown error"))
+    except Exception as e:
+        # Fallback: call the helper function directly (same process)
+        try:
+            import importlib, sys
+            main_mod = sys.modules.get("__main__") or importlib.import_module("main")
+            result = await main_mod._relink_project_files(pid, footage_root)
+        except Exception as e2:
+            await update.message.reply_text(f"⚠️ Relink failed: {e2}")
+            return
+
+    relinked = result.get("relinked", 0)
+    still_missing = result.get("still_missing", 0)
+    total = result.get("total", 0)
+
+    if relinked:
+        status = f"✅ <b>{relinked}</b> clips relinked"
+        if still_missing:
+            status += f" · <b>{still_missing}</b> still missing (check they're in that folder)"
+    else:
+        status = f"⚠️ No clips matched — are the MP4 filenames the same as in the project?"
+
+    await update.message.reply_text(
+        f"📂 <b>{_escape_html(project_name)}</b>\n\n"
+        f"{status}\n\n"
+        f"<i>{total} clips total · footage root: {_escape_html(footage_root)}</i>",
+        parse_mode=ParseMode.HTML,
+    )
 
 
 async def _run_broad_command(update, ctx, focus: str):
@@ -1259,9 +1376,9 @@ async def on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if not text:
             return
 
-        # ── Custom-instructions capture mode ─────────────────────────────
-        # If the user tapped "Edit" in /instructions, the next free-text
-        # message they send becomes their new instructions.
+        # ── Capture-mode handlers (must come before AI path) ─────────────
+
+        # Instructions capture: next message becomes custom instructions
         if chat_id in _waiting_instructions:
             _waiting_instructions.discard(chat_id)
             _save_instructions(chat_id, text)
@@ -1273,6 +1390,18 @@ async def on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 "Use /instructions to view or change them.",
                 parse_mode=ParseMode.HTML,
             )
+            return
+
+        # Relink capture: next message is a footage folder path
+        if chat_id in _waiting_relink:
+            _waiting_relink.discard(chat_id)
+            pid = await _get_active(chat_id)
+            if not pid:
+                await update.message.reply_text("No active project. Use /use <id> first.")
+                return
+            from database import get_project
+            project = await get_project(pid)
+            await _do_relink(update, pid, text, project["name"] if project else str(pid))
             return
 
         # Block AI in offline mode
@@ -1530,6 +1659,7 @@ async def run_telegram_bot(token: str, settings_loader):
     _app.add_handler(CommandHandler("summary",      cmd_summary))
     _app.add_handler(CommandHandler("locations",    cmd_locations))
     _app.add_handler(CommandHandler("instructions", cmd_instructions))
+    _app.add_handler(CommandHandler("relink",       cmd_relink))
     _app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     _app.add_handler(CallbackQueryHandler(on_callback))
 

@@ -899,6 +899,70 @@ async def admin_update():
         raise HTTPException(500, f"Update failed: {e.output.decode()[-300:] if e.output else e}")
 
 
+# ── Relink ──
+
+async def _relink_project_files(project_id: int, footage_root: str) -> dict:
+    """
+    Walk `footage_root`, index every file by basename, then update every
+    project file whose path doesn't exist locally but whose basename matches.
+    Also registers footage_root as a project folder if not already present.
+    Returns {"relinked": N, "still_missing": M, "total": T}.
+    """
+    import aiosqlite
+    from database import DB_PATH, get_project_files, add_project_folder, get_project_folders
+
+    root = Path(footage_root)
+    if not root.is_dir():
+        raise ValueError(f"Not a directory: {footage_root}")
+
+    # Index by basename (first match wins for duplicates)
+    index: dict[str, str] = {}
+    for r, _, fnames in os.walk(root):
+        for fn in fnames:
+            if fn.startswith("."):
+                continue
+            index.setdefault(fn, str(Path(r) / fn))
+
+    files = await get_project_files(project_id)
+    relinked = 0
+    still_missing = 0
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        for f in files:
+            p = Path(f["path"])
+            if p.exists():
+                continue          # already good
+            new_path = index.get(f["filename"])
+            if new_path:
+                await db.execute(
+                    "UPDATE files SET path = ? WHERE id = ?",
+                    (new_path, f["id"])
+                )
+                relinked += 1
+            else:
+                still_missing += 1
+        await db.commit()
+
+    # Register the folder so it shows in Bins (avoids duplicates)
+    existing = {fol["path"] for fol in await get_project_folders(project_id)}
+    if footage_root not in existing:
+        await add_project_folder(project_id, footage_root)
+
+    return {"relinked": relinked, "still_missing": still_missing, "total": len(files)}
+
+
+class RelinkBody(BaseModel):
+    footage_root: str
+
+@app.post("/api/projects/{project_id}/relink")
+async def api_relink(project_id: int, body: RelinkBody):
+    """Relink footage paths by walking footage_root and matching basenames."""
+    try:
+        return await _relink_project_files(project_id, body.footage_root)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 # ── Files ──
 
 @app.get("/api/projects/{project_id}/files")
@@ -1831,12 +1895,20 @@ async def import_project(file: UploadFile = File(...), footage_root: str = Form(
     new_proj_id = await create_project(data["project"]["name"] + " (imported)")
     log.info(f"Import: created new project id={new_proj_id}")
 
-    # Folders
-    for fol in data.get("folders", []):
-        try:
-            await add_project_folder(new_proj_id, fol["path"])
-        except Exception:
-            pass
+    # Folders — only add paths that actually exist on THIS machine.
+    # The bundle contains the sender's paths (e.g. /Users/them/...) which won't
+    # exist here.  Adding them causes doubled entries when the recipient then
+    # clicks + Add to link their own copy of the footage.
+    # If footage_root was supplied we register that single folder instead.
+    if footage_root and Path(footage_root).is_dir():
+        await add_project_folder(new_proj_id, footage_root)
+    else:
+        for fol in data.get("folders", []):
+            if Path(fol["path"]).is_dir():   # only add if it exists locally
+                try:
+                    await add_project_folder(new_proj_id, fol["path"])
+                except Exception:
+                    pass
 
     # Files → new IDs
     old_to_new_id: dict[int, int] = {}
