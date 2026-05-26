@@ -4,7 +4,8 @@
 # Web framework
 fastapi==0.115.12
 uvicorn[standard]==0.34.2
-starlette==0.46.2
+# Starlette 1.0.0+ broke compatibility with this FastAPI; pin to last 0.46.x
+starlette>=0.46.0,<0.47.0
 python-multipart==0.0.22
 
 # Database
@@ -15,9 +16,9 @@ faster-whisper==1.2.1
 av==17.0.1
 
 # Scene detection
-scenedetect[opencv]==0.7
-opencv-python-headless==4.13.0.92
-numpy<2.0
+# Don't use the [opencv] extra — we install opencv-python-headless directly.
+scenedetect>=0.6.5
+opencv-python-headless>=4.10,<5.0
 
 # AI providers
 anthropic==0.97.0
