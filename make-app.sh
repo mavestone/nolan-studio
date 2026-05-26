@@ -6,11 +6,29 @@
 #   ./make-app.sh                       # builds in current dir as ./Nolan.app
 #   ./make-app.sh /Applications         # builds + installs to /Applications/Nolan.app
 #   ./make-app.sh ~/Desktop             # builds + installs to ~/Desktop/Nolan.app
+#
+# Uses a Cocoa Swift launcher (launcher/nolan-launcher) so the app registers
+# properly with WindowServer — gets the dock indicator dot, no infinite bouncing.
+# If the prebuilt binary is missing AND swiftc is available, recompiles it.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET_DIR="${1:-$ROOT}"
 APP="$TARGET_DIR/Nolan.app"
+
+# Ensure the Swift launcher binary exists (rebuild if user has swiftc)
+LAUNCHER_BIN="$ROOT/launcher/nolan-launcher"
+if [[ ! -f "$LAUNCHER_BIN" ]] && command -v swiftc >/dev/null 2>&1; then
+    echo "▸ Compiling Cocoa launcher…"
+    (
+        cd "$ROOT/launcher"
+        swiftc -O -target arm64-apple-macos11  main.swift -o nolan-launcher-arm64
+        swiftc -O -target x86_64-apple-macos11 main.swift -o nolan-launcher-x86_64
+        lipo -create nolan-launcher-arm64 nolan-launcher-x86_64 -output nolan-launcher
+        rm -f nolan-launcher-arm64 nolan-launcher-x86_64
+    )
+fi
+[[ -f "$LAUNCHER_BIN" ]] || { echo "✗ Missing launcher/nolan-launcher and no swiftc available."; exit 1; }
 
 # Need /Applications? Use sudo for install
 NEED_SUDO=""
@@ -61,11 +79,17 @@ $NEED_SUDO tee "$APP/Contents/Info.plist" >/dev/null <<EOF
 </plist>
 EOF
 
-# ── Launcher script ──
-# Stays attached to python3 so macOS shows the running-dot under Nolan in the Dock.
-# Quitting via Dock right-click → Quit (or Cmd+Q after focusing the app) cleanly
-# kills the Python server.
-$NEED_SUDO tee "$APP/Contents/MacOS/Nolan" >/dev/null <<EOF
+# ── Native Cocoa launcher (Swift) ──
+# Copy the prebuilt universal binary into the bundle. It properly registers
+# with NSApplication so the dock dot lights up and the bounce stops.
+$NEED_SUDO cp "$LAUNCHER_BIN" "$APP/Contents/MacOS/Nolan"
+$NEED_SUDO chmod +x "$APP/Contents/MacOS/Nolan"
+
+# Write the repo path next to the binary so the Swift launcher can find main.py
+$NEED_SUDO bash -c "echo '$ROOT' > '$APP/Contents/Resources/nolan-root.txt'"
+
+# Legacy bash launcher (kept for emergency fallback — never executed by .app)
+$NEED_SUDO tee "$APP/Contents/MacOS/.legacy-bash-launcher" >/dev/null <<EOF
 #!/bin/bash
 # Nolan launcher
 
@@ -198,8 +222,7 @@ open "http://localhost:8765/"
 # Block on the python child; exit when it does.
 wait \$SERVER_PID
 EOF
-
-$NEED_SUDO chmod +x "$APP/Contents/MacOS/Nolan"
+$NEED_SUDO chmod +x "$APP/Contents/MacOS/.legacy-bash-launcher"
 
 # ── Icon ──
 if [[ -f "$ROOT/nolan.icns" ]]; then
