@@ -92,6 +92,20 @@ fi
 # .app launches have a minimal PATH — add the usual Homebrew & Python locations
 export PATH="/usr/local/bin:/opt/homebrew/bin:/Library/Frameworks/Python.framework/Versions/3.11/bin:/Library/Frameworks/Python.framework/Versions/3.12/bin:\$PATH"
 
+# Detect TRUE hardware arch.
+# `uname -m` is unreliable: returns x86_64 when shell runs under Rosetta even on
+# Apple Silicon. Use sysctl to ask the kernel about the actual CPU.
+if /usr/sbin/sysctl -n hw.optional.arm64 2>/dev/null | grep -q "^1\$"; then
+    HOST_ARCH="arm64"
+else
+    HOST_ARCH="x86_64"
+fi
+
+# We'll try the "real" arch first, then fall back to the other one if dlopen
+# fails (covers users who installed wheels under Rosetta).
+ARCH_ORDER=("\$HOST_ARCH")
+if [ "\$HOST_ARCH" = "arm64" ]; then ARCH_ORDER+=("x86_64"); else ARCH_ORDER+=("arm64"); fi
+
 # Find a Python that has our deps. Order:
 #   1. project venv (.venv/bin/python3)
 #   2. Framework Python 3.11/3.12 (typical brew/python.org)
@@ -106,16 +120,49 @@ PYTHON_CANDIDATES=(
     "/usr/local/bin/python3"
     "\$(command -v python3)"
 )
+# Set up logs early so the probe results are captured
+mkdir -p "\$LOG_DIR"
+DIAG_FILE="\$LOG_DIR/launcher.log"
+{
+    echo "── Nolan launcher diagnostic ── \$(date) ──"
+    echo "PATH: \$PATH"
+    echo "Working dir: \$(pwd)"
+    echo "User: \$(whoami)"
+    echo
+} >"\$DIAG_FILE"
+
+echo "Detected hardware arch: \$HOST_ARCH" >>"\$DIAG_FILE"
+echo "Will try archs in order: \${ARCH_ORDER[*]}" >>"\$DIAG_FILE"
+echo >>"\$DIAG_FILE"
+
 PYTHON_BIN=""
+CHOSEN_ARCH=""
 for cand in "\${PYTHON_CANDIDATES[@]}"; do
-    if [ -x "\$cand" ] && "\$cand" -c "import dotenv, fastapi, faster_whisper" >/dev/null 2>&1; then
-        PYTHON_BIN="\$cand"
-        break
+    if [ ! -x "\$cand" ]; then
+        echo "✗ \$cand : not executable / missing" >>"\$DIAG_FILE"
+        continue
     fi
+    for try_arch in "\${ARCH_ORDER[@]}"; do
+        PROBE_OUT=\$(arch "-\${try_arch}" "\$cand" -c "import dotenv, fastapi, faster_whisper; print('ok')" 2>&1)
+        if [ "\$PROBE_OUT" = "ok" ]; then
+            echo "✓ \$cand : works as \$try_arch" >>"\$DIAG_FILE"
+            PYTHON_BIN="\$cand"
+            CHOSEN_ARCH="\$try_arch"
+            break 2
+        else
+            echo "  - \$cand as \$try_arch failed: \${PROBE_OUT##*$'\n'}" >>"\$DIAG_FILE"
+        fi
+    done
 done
 
+if [ -n "\$CHOSEN_ARCH" ]; then
+    ARCH_PREFIX=(arch "-\${CHOSEN_ARCH}")
+else
+    ARCH_PREFIX=()
+fi
+
 if [ -z "\$PYTHON_BIN" ]; then
-    osascript -e 'display dialog "Nolan needs Python with its dependencies installed.\n\nOpen Terminal and run:\n\n  cd '"\$NOLAN_ROOT"' && ./install.sh\n\nThen relaunch Nolan." buttons {"OK"} default button 1 with icon stop'
+    osascript -e "display dialog \"Nolan can't find a Python with its dependencies.\n\nDiagnostic log: \$DIAG_FILE\n\nQuick fix:  cd '\$NOLAN_ROOT' && ./install.sh\" buttons {\"OK\"} default button 1 with icon stop"
     exit 1
 fi
 
@@ -127,7 +174,7 @@ echo "Nolan launcher using: \$PYTHON_BIN" >"\$LOG_FILE"
 echo "──────────────────────────────────" >>"\$LOG_FILE"
 
 # Start the server in background, log to file. Capture PID.
-"\$PYTHON_BIN" main.py >>"\$LOG_FILE" 2>&1 &
+"\${ARCH_PREFIX[@]}" "\$PYTHON_BIN" main.py >>"\$LOG_FILE" 2>&1 &
 SERVER_PID=\$!
 
 # Ensure python is killed when the launcher quits (Cmd+Q on the app, etc.)
