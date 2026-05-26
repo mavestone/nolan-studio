@@ -339,14 +339,32 @@ async def chat_transcripts_only(project_id: int, user_message: str,
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
+
+    # ── Auto-register first user ──────────────────────────────────────────
+    # If NO chat IDs are configured yet, the first person to /start is almost
+    # certainly the owner setting up their own bot. Auto-add them so they
+    # don't hit a confusing dead-end. Subsequent unknown users still get the
+    # "ask the owner" message.
     if not _allowed(chat_id):
-        await update.message.reply_text(
-            f"👋 Hello! Your Telegram chat ID is:\n\n`{chat_id}`\n\n"
-            "Ask the owner to add this ID to Nolan's `telegram_chat_ids` setting "
-            "to unlock access.",
-            parse_mode=ParseMode.MARKDOWN,
-        )
-        return
+        s = _settings_loader() if _settings_loader else {}
+        existing_ids = s.get("telegram_chat_ids") or []
+        if not existing_ids:
+            # First user — auto-grant access and save
+            from pathlib import Path as _Path
+            import json as _json
+            settings_path = _Path("settings.json")
+            data = _json.loads(settings_path.read_text()) if settings_path.exists() else {}
+            data["telegram_chat_ids"] = [chat_id]
+            settings_path.write_text(_json.dumps(data, indent=2))
+            log.info(f"Auto-registered first Telegram user: {chat_id}")
+        else:
+            await update.message.reply_text(
+                f"👋 Hello! Your Telegram chat ID is:\n\n`{chat_id}`\n\n"
+                "Go to *Nolan → Settings → Telegram* and add this ID to "
+                "the Allowed Chat IDs field, then send /start again.",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+            return
 
     from database import get_projects
     projects = await get_projects()

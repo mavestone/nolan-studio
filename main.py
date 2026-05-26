@@ -596,21 +596,29 @@ async def api_delete_project(project_id: int):
 
 @app.get("/api/pick-folder")
 async def pick_folder():
-    script = (
-        "import tkinter as tk; from tkinter import filedialog; "
-        "root = tk.Tk(); root.withdraw(); root.wm_attributes('-topmost', 1); "
-        "path = filedialog.askdirectory(title='Select footage folder'); "
-        "print(path)"
+    # Use osascript (always available on macOS) instead of tkinter which
+    # is NOT bundled with Homebrew Python and silently fails on many installs.
+    applescript = (
+        'tell application "Finder"\n'
+        '    activate\n'
+        '    set folderRef to choose folder with prompt "Select footage folder"\n'
+        '    set folderPath to POSIX path of folderRef\n'
+        'end tell\n'
+        'return folderPath'
     )
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(
         None,
-        lambda: subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=120)
+        lambda: subprocess.run(
+            ["osascript", "-e", applescript],
+            capture_output=True, text=True, timeout=120
+        )
     )
     path = result.stdout.strip()
     if not path:
         raise HTTPException(400, "No folder selected")
-    return {"path": path}
+    # osascript returns paths with trailing slash — normalise
+    return {"path": path.rstrip("/")}
 
 
 @app.post("/api/projects/{project_id}/folders")
@@ -1618,6 +1626,7 @@ class SettingsPatch(BaseModel):
 @app.patch("/api/settings")
 async def patch_settings(body: SettingsPatch):
     s = _load_settings()
+    old_token = s.get("telegram_token")
     if body.offline_mode is not None:
         s["offline_mode"] = body.offline_mode
     if body.telegram_token is not None:
@@ -1629,6 +1638,32 @@ async def patch_settings(body: SettingsPatch):
     if body.telegram_default_project_id is not None:
         s["telegram_default_project_id"] = body.telegram_default_project_id
     _save_settings(s)
+
+    # ── Restart the Telegram bot if the token changed ─────────────────────
+    # The bot is created at startup with a fixed token. If the user adds or
+    # changes the token via Settings UI we need to tear down the old bot and
+    # start a new one so they don't have to restart the whole app.
+    new_token = s.get("telegram_token")
+    if new_token != old_token:
+        global _telegram_task
+        if _telegram_task and not _telegram_task.done():
+            _telegram_task.cancel()
+            try:
+                await asyncio.wait_for(asyncio.shield(_telegram_task), timeout=3)
+            except Exception:
+                pass
+        _telegram_task = None
+        if new_token:
+            try:
+                from telegram_bot import run_telegram_bot
+                _telegram_task = asyncio.create_task(
+                    run_telegram_bot(new_token, _load_settings),
+                    name="telegram-bot",
+                )
+                log.info("Telegram bot restarted with new token")
+            except Exception as e:
+                log.warning(f"Telegram bot failed to restart: {e}")
+
     # Don't return the token
     out = dict(s)
     out.pop("telegram_token", None)
