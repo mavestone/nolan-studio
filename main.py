@@ -792,6 +792,73 @@ async def admin_reclassify(background_tasks: BackgroundTasks):
     return {"queued": True}
 
 
+@app.get("/api/admin/version")
+async def admin_version():
+    """Return the current git commit + the latest available on origin/main."""
+    import subprocess as _sub
+    root = str(Path(__file__).resolve().parent)
+    def _git(*args):
+        try:
+            return _sub.check_output(["git", "-C", root, *args], stderr=_sub.DEVNULL).decode().strip()
+        except Exception:
+            return None
+    current      = _git("rev-parse", "--short", "HEAD")
+    current_msg  = _git("log", "-1", "--format=%s")
+    return {
+        "current":     current,
+        "current_msg": current_msg,
+        "branch":      _git("rev-parse", "--abbrev-ref", "HEAD"),
+        "is_git_repo": current is not None,
+    }
+
+
+@app.post("/api/admin/update")
+async def admin_update():
+    """
+    Pull latest from GitHub origin/main and rebuild the .app.
+    Requires the source to be a git checkout. Returns the new commit info;
+    user must restart the server for code changes to take effect.
+    """
+    import subprocess as _sub
+    root = str(Path(__file__).resolve().parent)
+
+    if not (Path(root) / ".git").is_dir():
+        raise HTTPException(400, "Not a git checkout — cannot auto-update.")
+
+    def _run(*args, check=True):
+        return _sub.check_output(args, cwd=root, stderr=_sub.STDOUT).decode()
+
+    try:
+        old = _sub.check_output(["git", "-C", root, "rev-parse", "--short", "HEAD"]).decode().strip()
+        _run("git", "-C", root, "fetch", "--quiet", "origin", "main")
+        # Hard-update to origin/main — wipes local-only edits, which is what we want for an "update from GitHub" button
+        _run("git", "-C", root, "reset", "--hard", "origin/main")
+        new = _sub.check_output(["git", "-C", root, "rev-parse", "--short", "HEAD"]).decode().strip()
+        new_msg = _sub.check_output(["git", "-C", root, "log", "-1", "--format=%s"]).decode().strip()
+        # Rebuild the .app bundle so the launcher script reflects any changes
+        try:
+            target = "/Applications" if Path("/Applications/Nolan.app").is_dir() else str(Path.home() / "Applications")
+            _sub.run(["bash", str(Path(root) / "make-app.sh"), target], cwd=root, check=False, stdout=_sub.DEVNULL, stderr=_sub.DEVNULL)
+        except Exception:
+            pass
+        # Bump Python deps if requirements.txt changed
+        try:
+            venv_pip = Path(root) / ".venv" / "bin" / "pip"
+            if venv_pip.exists():
+                _sub.run([str(venv_pip), "install", "-r", str(Path(root) / "requirements.txt"), "--quiet"], cwd=root, check=False)
+        except Exception:
+            pass
+        return {
+            "ok": True,
+            "old_commit": old,
+            "new_commit": new,
+            "new_message": new_msg,
+            "restart_required": old != new,
+        }
+    except _sub.CalledProcessError as e:
+        raise HTTPException(500, f"Update failed: {e.output.decode()[-300:] if e.output else e}")
+
+
 # ── Files ──
 
 @app.get("/api/projects/{project_id}/files")

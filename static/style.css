@@ -172,26 +172,10 @@ html, body {
 
 .project-card-meta { font-size: 11px; color: var(--text3); }
 
-.project-card-delete {
-  position: absolute;
-  top: 7px; right: 7px;
-  width: 24px; height: 24px;
-  background: rgba(0,0,0,0.6);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--text3);
-  font-size: 11px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0;
-  transition: opacity var(--t-fast), color var(--t-fast);
-  z-index: 2;
-  backdrop-filter: blur(4px);
+/* Legacy delete style — replaced by .project-card-iconbtn in v38, kept as no-op for back-compat */
+.project-card-delete:not(.project-card-iconbtn) {
+  display: none;
 }
-.project-card:hover .project-card-delete { opacity: 1; }
-.project-card-delete:hover { color: var(--red); border-color: var(--red); }
 
 /* ═══════════════════════════════════════ MODALS ════════════════════════════════════ */
 .modal-overlay {
@@ -700,6 +684,38 @@ html, body {
   font-size: 11px;
   color: var(--text3);
   margin-left: 12px;
+}
+
+.settings-version {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 6px;
+}
+.settings-version-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--text3);
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.settings-version-value {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text2);
+  word-break: break-word;
+}
+.settings-version-value code {
+  background: var(--bg4);
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: var(--accent);
 }
 .settings-status.ok { color: var(--green); }
 .settings-status.err { color: var(--red); }

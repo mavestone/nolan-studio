@@ -235,6 +235,7 @@ async function openSettings() {
   const modal = document.getElementById('settings-modal');
   modal.style.display = 'flex';
   document.getElementById('settings-status').textContent = '';
+  loadVersionInfo();
 
   // Clear inputs (we use placeholders to show current state)
   ['key-anthropic','key-groq','key-groq_2','key-gemini','tg-token','tg-chat-ids'].forEach(id => {
@@ -350,6 +351,53 @@ async function saveTelegramSettings() {
     setTimeout(() => openSettings(), 400);
   } catch (e) {
     flashSettingsStatus('Failed: ' + e.message, 'err');
+  }
+}
+
+async function updateFromGithub() {
+  if (!confirm('Pull the latest version from GitHub?\n\nLocal modifications will be discarded. After update, the server will need a restart for the changes to take effect.')) return;
+  const btn = document.getElementById('settings-update-btn');
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<svg width="11" height="11" viewBox="0 0 11 11" fill="none" style="margin-right:5px;animation:spin 1s linear infinite"><circle cx="5.5" cy="5.5" r="4" stroke="currentColor" stroke-width="1.4" stroke-dasharray="18" stroke-dashoffset="6"/></svg>Updating…';
+  try {
+    const res = await apiFetch('/api/admin/update', 'POST', {});
+    btn.innerHTML = original;
+    btn.disabled = false;
+    if (res.old_commit === res.new_commit) {
+      flashSettingsStatus(`✓ Already up to date · ${res.new_commit}`, 'ok');
+      return;
+    }
+    flashSettingsStatus(`✓ Updated ${res.old_commit} → ${res.new_commit} · "${res.new_message}"`, 'ok');
+    // Reload version display
+    loadVersionInfo();
+    if (res.restart_required) {
+      setTimeout(() => {
+        alert(
+          `Updated to ${res.new_commit} — "${res.new_message}"\n\n` +
+          `Quit Terminal (Cmd+Q) and re-open Nolan from /Applications to load the new code.`
+        );
+      }, 600);
+    }
+  } catch (e) {
+    flashSettingsStatus('Update failed: ' + e.message, 'err');
+    btn.disabled = false;
+    btn.innerHTML = original;
+  }
+}
+
+async function loadVersionInfo() {
+  const el = document.getElementById('settings-version');
+  if (!el) return;
+  try {
+    const v = await apiFetch('/api/admin/version');
+    if (v.is_git_repo) {
+      el.innerHTML = `<code>${escHtml(v.current)}</code> · ${escHtml(v.current_msg || '')}`;
+    } else {
+      el.textContent = 'Not a git checkout — manual update needed';
+    }
+  } catch (_) {
+    el.textContent = 'Version unknown';
   }
 }
 
