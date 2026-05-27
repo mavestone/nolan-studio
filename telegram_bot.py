@@ -40,8 +40,8 @@ _active_project: dict[int, int] = {}
 _app: Application | None = None
 _settings_loader = None      # callable returning current settings dict
 
-# Chats currently waiting for user to type their custom instructions
-_waiting_instructions: set[int] = set()
+# Chats in capture mode: value is "add" (append) or "set" (replace all)
+_waiting_instructions: dict[int, str] = {}
 
 # Chats currently waiting for user to type a footage folder path for relinking
 _waiting_relink: set[int] = set()
@@ -49,7 +49,7 @@ _waiting_relink: set[int] = set()
 
 def _clear_waiting(chat_id: int) -> None:
     """Cancel any pending capture-mode state for this chat."""
-    _waiting_instructions.discard(chat_id)
+    _waiting_instructions.pop(chat_id, None)
     _waiting_relink.discard(chat_id)
 
 
@@ -73,25 +73,39 @@ async def _get_active(chat_id: int) -> int | None:
 
 
 # ── Custom instructions per chat ─────────────────────────────────────────
+# Stored as a list of strings in settings.json under telegram_instructions.
+# Backward-compat: if an old entry is a plain string, treat it as one item.
+
+def _get_instruction_lines(chat_id: int) -> list[str]:
+    """Return instructions as a list of non-empty lines."""
+    s = _settings_loader() if _settings_loader else {}
+    raw = (s.get("telegram_instructions") or {}).get(str(chat_id))
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return [l for l in raw if l.strip()]
+    # Legacy: plain string — split on newlines
+    return [l.strip() for l in str(raw).splitlines() if l.strip()]
+
 
 def _get_instructions(chat_id: int) -> str:
-    """Return the custom instructions saved for this chat (empty string if none)."""
-    s = _settings_loader() if _settings_loader else {}
-    return (s.get("telegram_instructions") or {}).get(str(chat_id), "")
+    """Return instructions joined as a single string (for LLM injection)."""
+    lines = _get_instruction_lines(chat_id)
+    return "\n".join(lines)
 
 
-def _save_instructions(chat_id: int, text: str | None) -> None:
-    """Persist custom instructions for a chat to settings.json."""
+def _save_instruction_lines(chat_id: int, lines: list[str] | None) -> None:
+    """Persist a list of instruction lines to settings.json."""
     from pathlib import Path as _Path
     import json as _json
     settings_path = _Path("settings.json")
     data = _json.loads(settings_path.read_text()) if settings_path.exists() else {}
-    instructions = data.get("telegram_instructions") or {}
-    if text:
-        instructions[str(chat_id)] = text
+    bucket = data.get("telegram_instructions") or {}
+    if lines:
+        bucket[str(chat_id)] = [l for l in lines if l.strip()]
     else:
-        instructions.pop(str(chat_id), None)
-    data["telegram_instructions"] = instructions
+        bucket.pop(str(chat_id), None)
+    data["telegram_instructions"] = bucket
     settings_path.write_text(_json.dumps(data, indent=2))
 
 
@@ -725,61 +739,112 @@ async def cmd_locations(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await _run_broad_command(update, ctx, "locations")
 
 
+def _build_instructions_message(chat_id: int):
+    """Return (body_html, keyboard) for the /instructions display."""
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    lines = _get_instruction_lines(chat_id)
+
+    if lines:
+        numbered = "\n".join(f"{i+1}. {_escape_html(l)}" for i, l in enumerate(lines))
+        body = (
+            f"📋 <b>Current instructions</b> ({len(lines)} item{'s' if len(lines)!=1 else ''}):\n\n"
+            f"{numbered}\n\n"
+            "<i>These shape every AI response in this chat.</i>"
+        )
+        # Remove buttons for each line (up to 8), then Add / Clear all
+        remove_row = [
+            InlineKeyboardButton(f"✕ {i+1}", callback_data=f"instr_rm_{i}")
+            for i in range(min(len(lines), 8))
+        ]
+        bottom_row = [
+            InlineKeyboardButton("➕ Add item", callback_data="instr_add"),
+            InlineKeyboardButton("📝 Replace all", callback_data="instr_set"),
+            InlineKeyboardButton("🗑 Clear all", callback_data="instr_clear"),
+        ]
+        # Split remove row into chunks of 4
+        rows = [remove_row[i:i+4] for i in range(0, len(remove_row), 4)]
+        rows.append(bottom_row)
+        keyboard = InlineKeyboardMarkup(rows)
+    else:
+        body = (
+            "📋 <b>No instructions set yet.</b>\n\n"
+            "Instructions tell Nolan how to think — what to prioritise, "
+            "what tone to use, what to avoid.\n\n"
+            "Tap <b>➕ Add item</b> to type one rule, or <b>📝 Paste block</b> "
+            "to paste a full set at once."
+        )
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("➕ Add item", callback_data="instr_add"),
+            InlineKeyboardButton("📝 Paste block", callback_data="instr_set"),
+        ]])
+
+    return body, keyboard
+
+
 async def cmd_instructions(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """
-    /instructions          — show current instructions + Edit / Clear buttons
-    /instructions <text>   — set instructions immediately (inline shortcut)
-    /instructions clear    — clear instructions immediately
+    /instructions              — show numbered list with per-item remove buttons
+    /instructions add <text>   — append one item immediately
+    /instructions remove <n>   — remove item number n
+    /instructions clear        — clear all
     """
     chat_id = update.effective_chat.id
+    _clear_waiting(chat_id)
     if not _allowed(chat_id):
         return
 
-    args = " ".join(ctx.args or "").strip() if ctx.args else ""
+    args_list = ctx.args or []
+    subcmd = args_list[0].lower() if args_list else ""
+    rest = " ".join(args_list[1:]).strip()
 
-    # Inline clear shortcut
-    if args.lower() == "clear":
-        _save_instructions(chat_id, None)
-        await update.message.reply_text("🗑️ Custom instructions cleared.", parse_mode=ParseMode.HTML)
+    # /instructions clear
+    if subcmd == "clear":
+        _save_instruction_lines(chat_id, None)
+        await update.message.reply_text("🗑 All instructions cleared.", parse_mode=ParseMode.HTML)
         return
 
-    # Inline set shortcut — /instructions <anything else>
-    if args:
-        _save_instructions(chat_id, args)
-        preview = args[:200] + ("…" if len(args) > 200 else "")
+    # /instructions remove <n>
+    if subcmd in ("remove", "rm", "delete", "del"):
+        lines = _get_instruction_lines(chat_id)
+        try:
+            idx = int(rest) - 1
+            removed = lines.pop(idx)
+            _save_instruction_lines(chat_id, lines)
+            await update.message.reply_text(
+                f"✕ Removed: <i>{_escape_html(removed[:120])}</i>",
+                parse_mode=ParseMode.HTML,
+            )
+        except (ValueError, IndexError):
+            await update.message.reply_text(
+                f"Usage: <code>/instructions remove &lt;number&gt;</code>",
+                parse_mode=ParseMode.HTML,
+            )
+        return
+
+    # /instructions add <text>
+    if subcmd == "add" and rest:
+        lines = _get_instruction_lines(chat_id)
+        lines.append(rest)
+        _save_instruction_lines(chat_id, lines)
         await update.message.reply_text(
-            f"✅ <b>Custom instructions saved:</b>\n\n<i>{_escape_html(preview)}</i>\n\n"
-            "These will shape every AI response in this chat.",
+            f"✅ Added: <i>{_escape_html(rest[:150])}</i>\n"
+            f"<code>/instructions</code> to view all.",
             parse_mode=ParseMode.HTML,
         )
         return
 
-    # Show current instructions with Edit / Clear inline buttons
-    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-    current = _get_instructions(chat_id)
-    if current:
-        body = (
-            f"📋 <b>Your current instructions:</b>\n\n"
-            f"<blockquote>{_escape_html(current)}</blockquote>\n\n"
-            "These are added to every AI prompt in this chat."
+    # /instructions add (no text) — enter capture mode for a single item
+    if subcmd == "add":
+        _waiting_instructions[chat_id] = "add"
+        await update.message.reply_text(
+            "➕ <b>Send your new instruction</b> as the next message.\n\n"
+            "It will be appended to the list. Send /instructions to cancel.",
+            parse_mode=ParseMode.HTML,
         )
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("✏️ Edit", callback_data="instr_edit"),
-            InlineKeyboardButton("🗑️ Clear", callback_data="instr_clear"),
-        ]])
-    else:
-        body = (
-            "📋 <b>No custom instructions set.</b>\n\n"
-            "Instructions let you shape how Nolan responds — e.g.:\n"
-            '<i>"Focus on emotional moments. Prefer short snappy clips. '
-            'This is a wedding film so look for tears, laughter, vows."</i>\n\n'
-            "Tap <b>Add instructions</b> or send:\n"
-            "<code>/instructions Your text here</code>"
-        )
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("✏️ Add instructions", callback_data="instr_edit"),
-        ]])
+        return
 
+    # Default: show the list
+    body, keyboard = _build_instructions_message(chat_id)
     await update.message.reply_text(body, parse_mode=ParseMode.HTML, reply_markup=keyboard)
 
 
@@ -1378,18 +1443,30 @@ async def on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         # ── Capture-mode handlers (must come before AI path) ─────────────
 
-        # Instructions capture: next message becomes custom instructions
+        # Instructions capture: "add" appends one item, "set" replaces all
         if chat_id in _waiting_instructions:
-            _waiting_instructions.discard(chat_id)
-            _save_instructions(chat_id, text)
-            preview = text[:200] + ("…" if len(text) > 200 else "")
-            await update.message.reply_text(
-                f"✅ <b>Instructions saved!</b>\n\n"
-                f"<blockquote>{_escape_html(preview)}</blockquote>\n\n"
-                "Every AI response in this chat will follow these. "
-                "Use /instructions to view or change them.",
-                parse_mode=ParseMode.HTML,
-            )
+            mode = _waiting_instructions.pop(chat_id)
+            lines = _get_instruction_lines(chat_id)
+            if mode == "add":
+                # Single item — keep the text as one entry (no splitting)
+                lines.append(text.strip())
+                _save_instruction_lines(chat_id, lines)
+                await update.message.reply_text(
+                    f"✅ <b>Added</b> ({len(lines)} item{'s' if len(lines)!=1 else ''} total):\n\n"
+                    f"<i>{_escape_html(text[:300])}</i>\n\n"
+                    "Use /instructions to view or manage.",
+                    parse_mode=ParseMode.HTML,
+                )
+            else:  # "set" — replace all, split pasted block into lines
+                new_lines = [l.strip() for l in text.splitlines() if l.strip()]
+                _save_instruction_lines(chat_id, new_lines)
+                body, keyboard = _build_instructions_message(chat_id)
+                await update.message.reply_text(
+                    f"✅ <b>Instructions replaced</b> ({len(new_lines)} item{'s' if len(new_lines)!=1 else ''}).\n\n"
+                    + body,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=keyboard,
+                )
             return
 
         # Relink capture: next message is a footage folder path
@@ -1505,25 +1582,57 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     data = query.data or ""
 
     # ── Custom instructions callbacks ─────────────────────────────────────
-    if data == "instr_edit":
-        _waiting_instructions.add(query.from_user.id)
+    uid = query.from_user.id
+
+    if data == "instr_add":
+        _waiting_instructions[uid] = "add"
         await query.answer()
         await query.message.reply_text(
-            "✏️ <b>Type your new instructions</b> and send them as a message.\n\n"
-            "<i>Example: Focus on emotional moments. Short snappy clips only. "
-            "This is a wedding film — look for tears, laughter, vows.</i>\n\n"
+            "➕ <b>Send your new instruction</b> as the next message.\n"
+            "It will be added to the list.\n\n"
+            "Send /instructions to cancel.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    if data == "instr_set":
+        _waiting_instructions[uid] = "set"
+        await query.answer()
+        await query.message.reply_text(
+            "📝 <b>Paste your full instructions</b> as the next message.\n"
+            "This <b>replaces</b> your current list (each line becomes one item).\n\n"
             "Send /instructions to cancel.",
             parse_mode=ParseMode.HTML,
         )
         return
 
     if data == "instr_clear":
-        _save_instructions(query.from_user.id, None)
+        _save_instruction_lines(uid, None)
         await query.answer("Instructions cleared ✓")
         await query.edit_message_text(
-            "🗑️ Custom instructions cleared. Nolan will use its default style.",
+            "🗑 All instructions cleared.",
             parse_mode=ParseMode.HTML,
         )
+        return
+
+    if data.startswith("instr_rm_"):
+        try:
+            idx = int(data.split("_")[-1])
+        except ValueError:
+            await query.answer("Bad request"); return
+        lines = _get_instruction_lines(uid)
+        if 0 <= idx < len(lines):
+            removed = lines.pop(idx)
+            _save_instruction_lines(uid, lines)
+            await query.answer(f"Removed ✓")
+            # Refresh the message with updated list
+            body, keyboard = _build_instructions_message(uid)
+            try:
+                await query.edit_message_text(body, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+            except Exception:
+                await query.message.reply_text(body, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+        else:
+            await query.answer("Item not found", show_alert=True)
         return
 
     # ── Finder reveal callbacks ───────────────────────────────────────────
