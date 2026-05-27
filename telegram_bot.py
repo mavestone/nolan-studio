@@ -440,7 +440,8 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "/locations — where this was shot\n"
         "/summary — short overview\n\n"
         "*Search & utility*\n"
-        "/search `<q>` — transcript matches\n"
+        "/vibe `<feel>` — find footage by vibe, not literal words\n"
+        "/search `<q>` — exact transcript matches\n"
         "/scenes `<q>` — shot/setting search (closeup, desert, …)\n"
         "/relink — relink footage paths on this machine\n"
         "/instructions — set custom style/focus rules for AI responses\n"
@@ -725,6 +726,246 @@ async def _broad_project_analysis(pid: int, focus: str, model: str = "haiku", ch
         except Exception as e:
             log.warning(f"Project analysis {name} failed: {e}")
     return "AI unavailable."
+
+
+async def _vibe_search(project_id: int, vibe: str,
+                       model: str = "haiku", chat_id: int | None = None) -> tuple[str, list[dict]]:
+    """
+    AI-driven vibe search.
+    Unlike keyword search, this expands the vibe into emotionally-adjacent
+    spoken-language terms, casts a wide net, then lets the AI pick the clips
+    that genuinely *feel* right — even if the literal words don't match.
+    """
+    from database import get_project, search_transcripts, get_file
+    from analyzer import (
+        _try_groq, _try_claude_cli, _try_anthropic_api,
+        _claude_available, _anthropic_client,
+        CLAUDE_MODEL, CLAUDE_SONNET_MODEL, CLAUDE_OPUS_MODEL,
+    )
+    import json as _json, re as _re
+
+    CLAUDE_MODEL_FOR = {"haiku": CLAUDE_MODEL, "sonnet": CLAUDE_SONNET_MODEL, "opus": CLAUDE_OPUS_MODEL}
+    loop = asyncio.get_event_loop()
+
+    project = await get_project(project_id)
+    if not project:
+        return "⚠️ Project not found.", []
+
+    # ── Step 1: Creative vibe → spoken-language expansion ──────────────────
+    # Different from regular query expansion: we want EMOTIONAL/SITUATIONAL
+    # words that appear in real speech when someone is IN that vibe — not
+    # formal descriptions of the vibe itself.
+    exp_system = (
+        "You help documentary editors find footage by VIBE and FEELING. "
+        "Convert a vibe into 12-16 words/phrases that ACTUALLY APPEAR in spoken transcripts "
+        "when that vibe is present. Think raw conversational speech — stutters, reactions, "
+        "colloquialisms, incomplete sentences. NOT formal descriptions. "
+        "For hooks: think of sentence starters people use when about to say something surprising. "
+        "For emotion: think of words people say mid-feeling, not describing the feeling. "
+        "Return ONLY a JSON array of lowercase words/short phrases (1-4 words each)."
+    )
+    exp_user = f"Vibe to find in footage: {vibe}\n\nJSON array of spoken words/phrases:"
+
+    raw_exp = None
+    try:
+        if _anthropic_client:
+            raw_exp = await loop.run_in_executor(None, lambda: _try_anthropic_api(exp_user, exp_system, 200))
+        else:
+            raw_exp = await loop.run_in_executor(None, lambda: _try_groq(exp_user, exp_system, 200, 0.5, []))
+    except Exception as e:
+        log.warning(f"Vibe expansion failed: {e}")
+
+    vibe_terms: list[str] = []
+    if raw_exp:
+        m = _re.search(r"\[[\s\S]*?\]", raw_exp)
+        if m:
+            try:
+                arr = _json.loads(m.group(0))
+                vibe_terms = [str(t).strip().lower() for t in arr if 2 <= len(str(t).strip()) <= 50][:16]
+            except Exception:
+                pass
+    if not vibe_terms:
+        vibe_terms = _extract_keywords(vibe)
+
+    log.info(f"Vibe '{vibe}' → terms: {vibe_terms}")
+
+    # ── Step 2: Wide net — search transcripts with vibe terms ──────────────
+    by_key: dict[tuple, dict] = {}
+    for kw in vibe_terms:
+        rows = await search_transcripts(kw, project_id)
+        for r in rows:
+            key = (r["file_id"], round(r["start_time"], 1))
+            if key in by_key:
+                by_key[key]["_score"] += 1
+            else:
+                r["_score"] = 1
+                by_key[key] = r
+
+    if not by_key:
+        return (
+            f"🌫 Couldn't find footage matching the vibe <i>{_escape_html(vibe)}</i>.\n\n"
+            "The transcripts may not have enough dialogue — try a different vibe or use /search.",
+            []
+        )
+
+    # Take top 80 candidates, sort chronologically for the model
+    ranked = sorted(by_key.values(), key=lambda r: -r["_score"])[:80]
+    ranked.sort(key=lambda r: (r["filename"], r["start_time"]))
+
+    excerpt_lines = []
+    for r in ranked[:60]:
+        ts = f"{int(r['start_time']//60)}:{int(r['start_time']%60):02d}"
+        excerpt_lines.append(f"[{r['filename']} @ {ts}] {r['text']}")
+    excerpt_block = "\n".join(excerpt_lines)
+
+    # ── Step 3: AI picks by vibe, not by literal match ─────────────────────
+    custom = _get_instructions(chat_id) if chat_id else ""
+    system = (
+        "You are a documentary editor finding footage by VIBE — not by literal keyword.\n\n"
+        "Your job: read these transcript excerpts and find the moments that genuinely "
+        "CAPTURE the requested vibe, even if the actual words are completely different.\n\n"
+        f"VIBE REQUESTED: {vibe}\n\n"
+        "HOW TO JUDGE:\n"
+        "• Emotional truth — does this moment FEEL right even if the words don't say it?\n"
+        "• Delivery > content — a nervous laugh, a trailing sentence, a sudden silence\n"
+        "• Contradiction — sometimes the best match is a moment that's the OPPOSITE of "
+        "  what's said but delivers the vibe\n"
+        "• Specificity — concrete moments beat generic ones every time\n"
+        "• Be ruthless — only flag genuine matches, never force it\n\n"
+        "OUTPUT FORMAT — Telegram HTML only (<b>, <i>, <code>, <blockquote>):\n"
+        "• One entry per pick: <b>STRONG</b> / <b>GOOD</b> / <b>DECENT</b> match\n"
+        "• 1-sentence WHY — what makes this moment capture the vibe\n"
+        "• Quote the key line if there is one: <blockquote>exact words</blockquote>\n"
+        "• Cite exactly: <code>[FILENAME.MP4 @ M:SS]</code> — every cited file becomes a button\n"
+        "• 6-10 picks max — quality over quantity\n"
+        + (f"\n\nEDITOR INSTRUCTIONS:\n{custom}" if custom else "")
+    )
+    prompt = (
+        f"Project: {project['name']}\n"
+        f"Vibe requested: {vibe}\n\n"
+        f"─── {len(excerpt_lines)} transcript excerpts ───\n{excerpt_block}\n"
+        f"────────────────────────────────\n\n"
+        f"Find the clips that best capture the vibe of: {vibe}"
+    )
+
+    reply = None
+    cm = CLAUDE_MODEL_FOR.get(model, CLAUDE_MODEL)
+    backends = []
+    if model in ("haiku", "sonnet", "opus"):
+        if _anthropic_client:
+            backends.append(("anthropic", lambda: _try_anthropic_api(prompt, system, 1200, cm)))
+        if _claude_available:
+            backends.append(("cli", lambda: _try_claude_cli(prompt, system, 1200, cm)))
+    backends.append(("groq", lambda: _try_groq(prompt, system, 1200, 0.7, [])))
+
+    for name, fn in backends:
+        try:
+            reply = await loop.run_in_executor(None, fn)
+            if reply:
+                log.info(f"Vibe search answered via {name}")
+                break
+        except Exception as e:
+            log.warning(f"Vibe search {name} failed: {e}")
+
+    if not reply:
+        return "⚠️ AI unavailable — can't do vibe search right now.", []
+
+    # ── Parse cited clips → Finder buttons ────────────────────────────────
+    cited_clips: list[dict] = []
+    seen: set[tuple] = set()
+    for m in _re.finditer(r"\[([^\]]+\.(?:MP4|MOV|MXF|mov|mp4|mxf))\s*@\s*(\d+):(\d{2})\]",
+                          reply, _re.IGNORECASE):
+        fname, mins, secs = m.group(1), int(m.group(2)), int(m.group(3))
+        start = mins * 60 + secs
+        # Find matching file_id from candidates
+        match_row = next(
+            (r for r in ranked if r["filename"].upper() == fname.upper()
+             and abs(r["start_time"] - start) < 30),
+            None
+        )
+        if match_row:
+            key = (match_row["file_id"], round(start, 0))
+            if key not in seen:
+                seen.add(key)
+                cited_clips.append({
+                    "file_id":    match_row["file_id"],
+                    "filename":   match_row["filename"],
+                    "start_time": start,
+                    "end_time":   start + 30,
+                })
+
+    return reply, cited_clips
+
+
+async def cmd_vibe(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    /vibe <description>
+    AI finds footage that matches the vibe/feeling — not literal keywords.
+    """
+    chat_id = update.effective_chat.id
+    _clear_waiting(chat_id)
+    if not _allowed(chat_id):
+        return
+
+    vibe = " ".join(ctx.args or "").strip()
+    if not vibe:
+        await update.message.reply_text(
+            "Usage: <code>/vibe good hooks</code> or <code>/vibe emotional breakdown</code>\n\n"
+            "Finds footage by feel — not by literal words.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    pid = await _get_active(chat_id)
+    if not pid:
+        await update.message.reply_text("Pick a project first: /use <id>")
+        return
+
+    s = _settings_loader() if _settings_loader else {}
+    if s.get("offline_mode"):
+        await update.message.reply_text("🔌 Offline mode — AI features disabled.")
+        return
+    model = s.get("telegram_model") or "haiku"
+
+    await update.message.reply_text(
+        f"🌫 <i>Finding the vibe of</i> <b>{_escape_html(vibe)}</b>…",
+        parse_mode=ParseMode.HTML,
+    )
+    keep_typing = asyncio.create_task(_keep_typing(ctx, chat_id))
+
+    try:
+        reply, cited_clips = await _vibe_search(pid, vibe, model=model, chat_id=chat_id)
+    except Exception as e:
+        log.exception("vibe search failed")
+        await update.message.reply_text(f"⚠️ Error: {e}")
+        return
+    finally:
+        keep_typing.cancel()
+
+    clean = _clean_telegram_html(reply)
+
+    # Build Finder buttons from cited clips
+    buttons, row = [], []
+    for c in cited_clips:
+        label = c["filename"]
+        if len(label) > 28:
+            label = label[:26] + "…"
+        row.append(InlineKeyboardButton(label, callback_data=f"open:{c['file_id']}"))
+        if len(row) == 2:
+            buttons.append(row); row = []
+    if row:
+        buttons.append(row)
+
+    for chunk in _split_long(clean, 4000):
+        try:
+            await update.message.reply_text(
+                chunk,
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(buttons) if buttons else None,
+            )
+            buttons = []  # only attach buttons to first chunk
+        except Exception:
+            await update.message.reply_text(_strip_html(chunk))
 
 
 async def cmd_story(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1775,6 +2016,7 @@ async def run_telegram_bot(token: str, settings_loader):
     _app.add_handler(CommandHandler("projects",     cmd_projects))
     _app.add_handler(CommandHandler("use",          cmd_use))
     _app.add_handler(CommandHandler("search",       cmd_search))
+    _app.add_handler(CommandHandler("vibe",         cmd_vibe))
     _app.add_handler(CommandHandler("scenes",       cmd_scenes))
     _app.add_handler(CommandHandler("stats",        cmd_stats))
     _app.add_handler(CommandHandler("model",        cmd_model))
