@@ -818,19 +818,19 @@ async def cmd_instructions(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 )
             return
 
-        # /instructions add <text>
+        # /instructions add <text>  — append inline
         if subcmd == "add" and rest:
             lines = _get_instruction_lines(chat_id)
             lines.append(rest)
-        _save_instruction_lines(chat_id, lines)
-        await update.message.reply_text(
-            f"✅ Added: <i>{_escape_html(rest[:150])}</i>\n"
-            f"<code>/instructions</code> to view all.",
-            parse_mode=ParseMode.HTML,
-        )
-        return
+            _save_instruction_lines(chat_id, lines)
+            await update.message.reply_text(
+                f"Added: <i>{_escape_html(rest[:150])}</i>\n"
+                "/instructions to view all.",
+                parse_mode=ParseMode.HTML,
+            )
+            return
 
-        # /instructions add (no text) — enter capture mode for a single item
+        # /instructions add (no text) — capture mode
         if subcmd == "add":
             _waiting_instructions[chat_id] = "add"
             await update.message.reply_text(
