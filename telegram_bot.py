@@ -744,10 +744,19 @@ def _build_instructions_message(chat_id: int):
     lines = _get_instruction_lines(chat_id)
 
     if lines:
-        # Truncate each line for display so the message stays readable
-        numbered = "\n".join(
-            f"{i+1}. {_escape_html(l[:180])}" for i, l in enumerate(lines)
-        )
+        # Truncate each line hard so the whole message stays under Telegram's 4096 limit
+        rows_text = []
+        char_budget = 2800  # leave room for header + footer + HTML tags
+        for i, l in enumerate(lines):
+            snippet = _escape_html(l[:120])
+            entry = f"{i+1}. {snippet}"
+            if char_budget - len(entry) < 0:
+                rows_text.append(f"<i>… and {len(lines) - i} more (use - buttons to manage)</i>")
+                break
+            rows_text.append(entry)
+            char_budget -= len(entry) + 1
+
+        numbered = "\n".join(rows_text)
         body = (
             f"<b>Instructions ({len(lines)} item{'s' if len(lines) != 1 else ''}):</b>\n\n"
             f"{numbered}\n\n"
