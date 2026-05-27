@@ -1,11 +1,25 @@
 import aiosqlite
 import json
+from contextlib import asynccontextmanager
 
 DB_PATH = "footage.db"
 
 
-async def init_db():
+@asynccontextmanager
+async def _db():
+    """
+    Open a database connection with WAL mode + a 10-second busy timeout.
+    WAL lets readers and one writer coexist without immediately locking.
+    busy_timeout makes SQLite retry for up to 10 s before raising 'locked'.
+    """
     async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute("PRAGMA busy_timeout=10000")  # 10 s
+        yield db
+
+
+async def init_db():
+    async with _db() as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS projects (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -175,7 +189,7 @@ async def init_db():
 # ── Projects ──
 
 async def create_project(name: str) -> int:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         await db.execute("INSERT INTO projects (name) VALUES (?)", (name,))
         await db.commit()
         async with db.execute("SELECT id FROM projects WHERE name = ?", (name,)) as cur:
@@ -184,7 +198,7 @@ async def create_project(name: str) -> int:
 
 
 async def get_projects() -> list:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("""
             SELECT p.*, COUNT(f.id) as file_count,
@@ -198,7 +212,7 @@ async def get_projects() -> list:
 
 
 async def get_project(project_id: int) -> dict | None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM projects WHERE id = ?", (project_id,)) as cur:
             row = await cur.fetchone()
@@ -206,7 +220,7 @@ async def get_project(project_id: int) -> dict | None:
 
 
 async def delete_project(project_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         await db.execute("DELETE FROM projects WHERE id = ?", (project_id,))
         await db.commit()
 
@@ -214,7 +228,7 @@ async def delete_project(project_id: int):
 # ── Project folders ──
 
 async def add_project_folder(project_id: int, path: str) -> int:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         await db.execute(
             "INSERT OR IGNORE INTO project_folders (project_id, path) VALUES (?, ?)",
             (project_id, path)
@@ -229,7 +243,7 @@ async def add_project_folder(project_id: int, path: str) -> int:
 
 
 async def get_project_folders(project_id: int) -> list:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT * FROM project_folders WHERE project_id = ? ORDER BY path",
@@ -239,7 +253,7 @@ async def get_project_folders(project_id: int) -> list:
 
 
 async def update_folder_scanned(folder_id: int, files_found: int):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         await db.execute(
             "UPDATE project_folders SET last_scanned = CURRENT_TIMESTAMP, files_found = ? WHERE id = ?",
             (files_found, folder_id)
@@ -248,7 +262,7 @@ async def update_folder_scanned(folder_id: int, files_found: int):
 
 
 async def remove_project_folder(folder_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         await db.execute("DELETE FROM project_folders WHERE id = ?", (folder_id,))
         await db.commit()
 
@@ -257,7 +271,7 @@ async def remove_project_folder(folder_id: int):
 
 async def upsert_file(project_id: int, path: str, filename: str, size_bytes: int) -> tuple[int, bool]:
     """Returns (file_id, is_new)."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         async with db.execute(
             "SELECT id FROM files WHERE project_id = ? AND path = ?", (project_id, path)
         ) as cur:
@@ -290,7 +304,7 @@ async def upsert_file(project_id: int, path: str, filename: str, size_bytes: int
 
 async def update_file_status(file_id: int, status: str, **kwargs):
     fields = ", ".join(f"{k} = ?" for k in kwargs)
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         if fields:
             await db.execute(
                 f"UPDATE files SET status = ?, {fields} WHERE id = ?",
@@ -302,7 +316,7 @@ async def update_file_status(file_id: int, status: str, **kwargs):
 
 
 async def save_segments(file_id: int, segments: list):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         await db.execute("DELETE FROM segments WHERE file_id = ?", (file_id,))
         await db.executemany(
             "INSERT INTO segments (file_id, start_time, end_time, text) VALUES (?, ?, ?, ?)",
@@ -312,7 +326,7 @@ async def save_segments(file_id: int, segments: list):
 
 
 async def save_analysis(file_id: int, data: dict):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         await db.execute("""
             INSERT OR REPLACE INTO analysis
               (file_id, story_value, summary, highlights, themes, characters, raw_json)
@@ -330,7 +344,7 @@ async def save_analysis(file_id: int, data: dict):
 
 
 async def get_project_files(project_id: int) -> list:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("""
             SELECT f.*, a.story_value, a.summary
@@ -343,7 +357,7 @@ async def get_project_files(project_id: int) -> list:
 
 
 async def get_file(file_id: int) -> dict | None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM files WHERE id = ?", (file_id,)) as cur:
             row = await cur.fetchone()
@@ -351,7 +365,7 @@ async def get_file(file_id: int) -> dict | None:
 
 
 async def get_transcript(file_id: int) -> list:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT * FROM segments WHERE file_id = ? ORDER BY start_time", (file_id,)
@@ -360,7 +374,7 @@ async def get_transcript(file_id: int) -> list:
 
 
 async def get_analysis(file_id: int) -> dict | None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM analysis WHERE file_id = ?", (file_id,)) as cur:
             row = await cur.fetchone()
@@ -379,7 +393,7 @@ async def get_analysis(file_id: int) -> dict | None:
 
 
 async def save_batch_checkpoint(project_id: int, batch_num: int, total_batches: int, summary: str):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         await db.execute("""
             INSERT OR REPLACE INTO bible_batch_checkpoints
               (project_id, batch_num, total_batches, summary)
@@ -390,7 +404,7 @@ async def save_batch_checkpoint(project_id: int, batch_num: int, total_batches: 
 
 async def get_batch_checkpoints(project_id: int, total_batches: int) -> dict:
     """Returns {batch_num: summary} for all saved batches matching total_batches."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         async with db.execute("""
             SELECT batch_num, summary FROM bible_batch_checkpoints
             WHERE project_id = ? AND total_batches = ?
@@ -400,7 +414,7 @@ async def get_batch_checkpoints(project_id: int, total_batches: int) -> dict:
 
 
 async def clear_batch_checkpoints(project_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         await db.execute(
             "DELETE FROM bible_batch_checkpoints WHERE project_id = ?", (project_id,)
         )
@@ -409,7 +423,7 @@ async def clear_batch_checkpoints(project_id: int):
 
 async def get_checkpoint_status(project_id: int) -> dict | None:
     """Returns info about any in-progress bible generation for this project."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         async with db.execute("""
             SELECT batch_num, total_batches FROM bible_batch_checkpoints
             WHERE project_id = ?
@@ -422,7 +436,7 @@ async def get_checkpoint_status(project_id: int) -> dict | None:
 
 
 async def save_project_analysis(project_id: int, data: dict):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         await db.execute("""
             INSERT OR REPLACE INTO project_analysis (project_id, raw_json)
             VALUES (?, ?)
@@ -431,7 +445,7 @@ async def save_project_analysis(project_id: int, data: dict):
 
 
 async def get_project_analysis(project_id: int) -> dict | None:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         async with db.execute(
             "SELECT raw_json FROM project_analysis WHERE project_id = ?", (project_id,)
         ) as cur:
@@ -443,7 +457,7 @@ async def get_project_analysis(project_id: int) -> dict | None:
 
 async def get_project_stats(project_id: int) -> dict:
     """Returns clip counts: total, done, with_transcript, silent, errors."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         async with db.execute("""
             SELECT
                 COUNT(*)                                                  AS total,
@@ -470,7 +484,7 @@ async def get_project_stats(project_id: int) -> dict:
 # ── Chat messages ──
 
 async def save_chat_message(project_id: int, role: str, content: str) -> int:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         cur = await db.execute(
             "INSERT INTO chat_messages (project_id, role, content) VALUES (?, ?, ?)",
             (project_id, role, content),
@@ -480,7 +494,7 @@ async def save_chat_message(project_id: int, role: str, content: str) -> int:
 
 
 async def get_chat_messages(project_id: int) -> list[dict]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT * FROM chat_messages WHERE project_id = ? ORDER BY created_at",
@@ -490,7 +504,7 @@ async def get_chat_messages(project_id: int) -> list[dict]:
 
 
 async def get_pinned_chat_messages(project_id: int) -> list[dict]:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT * FROM chat_messages WHERE project_id = ? AND pinned = 1 ORDER BY created_at",
@@ -500,7 +514,7 @@ async def get_pinned_chat_messages(project_id: int) -> list[dict]:
 
 
 async def set_chat_message_pinned(message_id: int, pinned: bool):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         await db.execute(
             "UPDATE chat_messages SET pinned = ? WHERE id = ?",
             (1 if pinned else 0, message_id),
@@ -509,7 +523,7 @@ async def set_chat_message_pinned(message_id: int, pinned: bool):
 
 
 async def clear_chat_messages(project_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         await db.execute("DELETE FROM chat_messages WHERE project_id = ?", (project_id,))
         await db.commit()
 
@@ -532,7 +546,7 @@ async def check_analysis_stale(project_id: int) -> dict:
         return {"has_bible": True, "stale": False, "new_clips": 0, "bible_clip_count": 0}
 
     # Count clips currently in the project that have transcripts
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         async with db.execute("""
             SELECT COUNT(DISTINCT s.file_id)
             FROM segments s
@@ -553,7 +567,7 @@ async def check_analysis_stale(project_id: int) -> dict:
 
 async def get_all_batch_summaries(project_id: int) -> list[str]:
     """Return all saved batch summaries for this project, ordered by batch_num."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         async with db.execute(
             "SELECT summary FROM bible_batch_checkpoints WHERE project_id = ? ORDER BY batch_num",
             (project_id,),
@@ -586,7 +600,7 @@ async def get_theme_relevant_clips(project_id: int, query: str, max_clips: int =
     if not words:
         return []
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         db.row_factory = aiosqlite.Row
         # Count matching segments per file (relevance score)
         conditions = " OR ".join("LOWER(s.text) LIKE ?" for _ in words)
@@ -626,7 +640,7 @@ async def get_theme_relevant_clips(project_id: int, query: str, max_clips: int =
 
 
 async def search_transcripts(query: str, project_id: int | None = None) -> list:
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         db.row_factory = aiosqlite.Row
         if project_id:
             sql = """
@@ -655,7 +669,7 @@ async def search_transcripts(query: str, project_id: int | None = None) -> list:
 async def save_scenes(file_id: int, scenes: list[dict]) -> None:
     """Upsert detected scenes for a file."""
     import json
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         await db.execute("DELETE FROM scenes WHERE file_id = ?", (file_id,))
         for s in scenes:
             tags_json = json.dumps(s.get("tags") or [])
@@ -695,7 +709,7 @@ async def update_scene_classification(scene_id: int, data: dict) -> None:
         return
     fields.append("ai_classified = 1")
     values.append(scene_id)
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         await db.execute(f"UPDATE scenes SET {', '.join(fields)} WHERE id = ?", values)
         await db.commit()
 
@@ -703,7 +717,7 @@ async def update_scene_classification(scene_id: int, data: dict) -> None:
 async def get_scenes(file_id: int) -> list[dict]:
     """Return all detected scenes for a file, ordered by scene_num."""
     import json
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT * FROM scenes WHERE file_id = ? ORDER BY scene_num",
@@ -726,7 +740,7 @@ async def search_project_scenes(project_id: int, q: str) -> list[dict]:
     import json
     q_lower = q.lower().strip()
     like = f"%{q_lower}%"
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("""
             SELECT s.*, f.filename, f.id as file_id
@@ -760,7 +774,7 @@ async def search_project_scenes(project_id: int, q: str) -> list[dict]:
 
 async def has_scenes(file_id: int) -> bool:
     """True if scene detection has been run for this file."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         async with db.execute(
             "SELECT COUNT(*) FROM scenes WHERE file_id = ?", (file_id,)
         ) as cur:
@@ -770,7 +784,7 @@ async def has_scenes(file_id: int) -> bool:
 
 async def save_poster_path(file_id: int, poster_path: str) -> None:
     """Save the poster thumbnail path for a clip."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         await db.execute(
             "UPDATE files SET poster_path = ? WHERE id = ?",
             (poster_path, file_id)
@@ -812,7 +826,7 @@ async def update_file_scene_summary(file_id: int, scenes: list[dict]) -> None:
 
     all_tags = sorted({t for s in scenes for t in (s.get("tags") or [])})
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         await db.execute(
             """UPDATE files SET
                 primary_shot_type = ?,
@@ -830,7 +844,7 @@ async def update_file_scene_summary(file_id: int, scenes: list[dict]) -> None:
 
 async def get_project_poster_paths(project_id: int, limit: int = 8) -> list[str]:
     """Get poster paths from the first N clips with posters in a project."""
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _db() as db:
         async with db.execute(
             "SELECT poster_path FROM files WHERE project_id = ? AND poster_path IS NOT NULL ORDER BY id LIMIT ?",
             (project_id, limit)

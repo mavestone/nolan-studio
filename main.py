@@ -53,7 +53,7 @@ async def reset_stuck_states():
     """Reset clips left mid-process from a previous crash/restart."""
     import aiosqlite
     from database import DB_PATH
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=10) as db:
         # transcribed/analyzing → done (they finished but state was stale)
         cur = await db.execute(
             "UPDATE files SET status = 'done' WHERE status IN ('analyzing', 'transcribed')"
@@ -80,7 +80,7 @@ async def reclassify_all_scenes():
     from pathlib import Path
     from scene_detector import _classify_shot_opencv
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=10) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("""
             SELECT id, file_id, thumbnail_path
@@ -95,7 +95,7 @@ async def reclassify_all_scenes():
     log.info(f"Reclassify: re-running setting/shot heuristic on {len(rows)} scenes…")
     loop = asyncio.get_event_loop()
     done = 0
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=10) as db:
         for r in rows:
             thumb = Path("static") / (r["thumbnail_path"] or "")
             if not thumb.exists():
@@ -122,7 +122,7 @@ async def reclassify_all_scenes():
     log.info(f"Reclassify: {done} scenes updated")
 
     # Refresh per-file summaries
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=10) as db:
         async with db.execute("SELECT DISTINCT file_id FROM scenes") as cur:
             fids = [r[0] for r in await cur.fetchall()]
     from database import get_scenes
@@ -143,7 +143,7 @@ async def cleanup_db_hidden_and_dupes():
     import aiosqlite, os
     from database import DB_PATH
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=10) as db:
         db.row_factory = aiosqlite.Row
 
         # 1. Hidden / metadata files
@@ -196,7 +196,7 @@ async def migrate_error_clips_to_silent():
     from database import DB_PATH
     from transcriber import has_audio_stream
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=10) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT id, path FROM files WHERE status = 'error'") as cur:
             rows = [dict(r) for r in await cur.fetchall()]
@@ -207,7 +207,7 @@ async def migrate_error_clips_to_silent():
     log.info(f"Migration: checking {len(rows)} error clips for silent reclassification…")
     loop = asyncio.get_event_loop()
     moved = 0
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=10) as db:
         for r in rows:
             try:
                 has_audio = await loop.run_in_executor(None, lambda p=r["path"]: has_audio_stream(p))
@@ -228,7 +228,7 @@ async def backfill_scene_classifications():
     from scene_detector import classify_shot
     from pathlib import Path
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=10) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT id, thumbnail_path FROM scenes WHERE shot_type IS NULL AND thumbnail_path IS NOT NULL"
@@ -242,7 +242,7 @@ async def backfill_scene_classifications():
     loop = asyncio.get_event_loop()
     classified = 0
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=10) as db:
         for row in rows:
             thumb_abs = Path("static") / row["thumbnail_path"]
             if not thumb_abs.exists():
@@ -265,7 +265,7 @@ async def backfill_scene_classifications():
     # ── Also backfill file-level scene summaries ──────────────────────────
     import aiosqlite, json
     from database import DB_PATH
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=10) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("""
             SELECT DISTINCT f.id FROM files f
@@ -772,7 +772,7 @@ async def api_stop():
 
     import aiosqlite
     from database import DB_PATH
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=10) as db:
         cur = await db.execute(
             "UPDATE files SET status = 'pending' "
             "WHERE status IN ('queued', 'transcribing', 'extracting_audio')"
@@ -927,7 +927,7 @@ async def _relink_project_files(project_id: int, footage_root: str) -> dict:
     relinked = 0
     still_missing = 0
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=10) as db:
         for f in files:
             p = Path(f["path"])
             if p.exists():
@@ -1569,7 +1569,7 @@ async def project_all_scenes(project_id: int, shot_type: str = ""):
     """Return all scenes for a project, optionally filtered by shot_type."""
     import aiosqlite, json
     from database import DB_PATH
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with aiosqlite.connect(DB_PATH, timeout=10) as db:
         db.row_factory = aiosqlite.Row
         if shot_type:
             sql = """
