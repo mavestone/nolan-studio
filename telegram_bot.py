@@ -741,41 +741,38 @@ async def cmd_locations(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 def _build_instructions_message(chat_id: int):
     """Return (body_html, keyboard) for the /instructions display."""
-    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     lines = _get_instruction_lines(chat_id)
 
     if lines:
-        numbered = "\n".join(f"{i+1}. {_escape_html(l)}" for i, l in enumerate(lines))
-        body = (
-            f"📋 <b>Current instructions</b> ({len(lines)} item{'s' if len(lines)!=1 else ''}):\n\n"
-            f"{numbered}\n\n"
-            "<i>These shape every AI response in this chat.</i>"
+        # Truncate each line for display so the message stays readable
+        numbered = "\n".join(
+            f"{i+1}. {_escape_html(l[:180])}" for i, l in enumerate(lines)
         )
-        # Remove buttons for each line (up to 8), then Add / Clear all
-        remove_row = [
-            InlineKeyboardButton(f"✕ {i+1}", callback_data=f"instr_rm_{i}")
+        body = (
+            f"<b>Instructions ({len(lines)} item{'s' if len(lines) != 1 else ''}):</b>\n\n"
+            f"{numbered}\n\n"
+            "<i>Tap a number to remove that item.</i>"
+        )
+        # Remove buttons — one per item, up to 8, split into rows of 4
+        rm_btns = [
+            InlineKeyboardButton(f"- {i+1}", callback_data=f"instr_rm_{i}")
             for i in range(min(len(lines), 8))
         ]
-        bottom_row = [
-            InlineKeyboardButton("➕ Add item", callback_data="instr_add"),
-            InlineKeyboardButton("📝 Replace all", callback_data="instr_set"),
-            InlineKeyboardButton("🗑 Clear all", callback_data="instr_clear"),
-        ]
-        # Split remove row into chunks of 4
-        rows = [remove_row[i:i+4] for i in range(0, len(remove_row), 4)]
-        rows.append(bottom_row)
+        rows: list[list] = [rm_btns[i:i+4] for i in range(0, len(rm_btns), 4)]
+        rows.append([InlineKeyboardButton("+ Add", callback_data="instr_add")])
+        rows.append([InlineKeyboardButton("Replace all", callback_data="instr_set"),
+                     InlineKeyboardButton("Clear all", callback_data="instr_clear")])
         keyboard = InlineKeyboardMarkup(rows)
     else:
         body = (
-            "📋 <b>No instructions set yet.</b>\n\n"
+            "<b>No instructions set yet.</b>\n\n"
             "Instructions tell Nolan how to think — what to prioritise, "
             "what tone to use, what to avoid.\n\n"
-            "Tap <b>➕ Add item</b> to type one rule, or <b>📝 Paste block</b> "
-            "to paste a full set at once."
+            "Tap <b>+ Add</b> to type a rule, or <b>Paste block</b> to paste a full set."
         )
         keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("➕ Add item", callback_data="instr_add"),
-            InlineKeyboardButton("📝 Paste block", callback_data="instr_set"),
+            InlineKeyboardButton("+ Add", callback_data="instr_add"),
+            InlineKeyboardButton("Paste block", callback_data="instr_set"),
         ]])
 
     return body, keyboard
@@ -793,38 +790,38 @@ async def cmd_instructions(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not _allowed(chat_id):
         return
 
-    args_list = ctx.args or []
-    subcmd = args_list[0].lower() if args_list else ""
-    rest = " ".join(args_list[1:]).strip()
+    try:
+        args_list = ctx.args or []
+        subcmd = args_list[0].lower() if args_list else ""
+        rest = " ".join(args_list[1:]).strip()
 
-    # /instructions clear
-    if subcmd == "clear":
-        _save_instruction_lines(chat_id, None)
-        await update.message.reply_text("🗑 All instructions cleared.", parse_mode=ParseMode.HTML)
-        return
+        # /instructions clear
+        if subcmd == "clear":
+            _save_instruction_lines(chat_id, None)
+            await update.message.reply_text("All instructions cleared.")
+            return
 
-    # /instructions remove <n>
-    if subcmd in ("remove", "rm", "delete", "del"):
-        lines = _get_instruction_lines(chat_id)
-        try:
-            idx = int(rest) - 1
-            removed = lines.pop(idx)
-            _save_instruction_lines(chat_id, lines)
-            await update.message.reply_text(
-                f"✕ Removed: <i>{_escape_html(removed[:120])}</i>",
-                parse_mode=ParseMode.HTML,
-            )
-        except (ValueError, IndexError):
-            await update.message.reply_text(
-                f"Usage: <code>/instructions remove &lt;number&gt;</code>",
-                parse_mode=ParseMode.HTML,
-            )
-        return
+        # /instructions remove <n>
+        if subcmd in ("remove", "rm", "delete", "del"):
+            lines = _get_instruction_lines(chat_id)
+            try:
+                idx = int(rest) - 1
+                removed = lines.pop(idx)
+                _save_instruction_lines(chat_id, lines)
+                await update.message.reply_text(
+                    f"Removed: <i>{_escape_html(removed[:120])}</i>",
+                    parse_mode=ParseMode.HTML,
+                )
+            except (ValueError, IndexError):
+                await update.message.reply_text(
+                    "Usage: /instructions remove <number>"
+                )
+            return
 
-    # /instructions add <text>
-    if subcmd == "add" and rest:
-        lines = _get_instruction_lines(chat_id)
-        lines.append(rest)
+        # /instructions add <text>
+        if subcmd == "add" and rest:
+            lines = _get_instruction_lines(chat_id)
+            lines.append(rest)
         _save_instruction_lines(chat_id, lines)
         await update.message.reply_text(
             f"✅ Added: <i>{_escape_html(rest[:150])}</i>\n"
@@ -833,19 +830,25 @@ async def cmd_instructions(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # /instructions add (no text) — enter capture mode for a single item
-    if subcmd == "add":
-        _waiting_instructions[chat_id] = "add"
-        await update.message.reply_text(
-            "➕ <b>Send your new instruction</b> as the next message.\n\n"
-            "It will be appended to the list. Send /instructions to cancel.",
-            parse_mode=ParseMode.HTML,
-        )
-        return
+        # /instructions add (no text) — enter capture mode for a single item
+        if subcmd == "add":
+            _waiting_instructions[chat_id] = "add"
+            await update.message.reply_text(
+                "Send your new instruction as the next message.\n"
+                "It will be appended to the list. Send /instructions to cancel."
+            )
+            return
 
-    # Default: show the list
-    body, keyboard = _build_instructions_message(chat_id)
-    await update.message.reply_text(body, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+        # Default: show the list
+        body, keyboard = _build_instructions_message(chat_id)
+        await update.message.reply_text(body, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+
+    except Exception as e:
+        log.exception("cmd_instructions failed")
+        await update.message.reply_text(
+            f"Something went wrong with /instructions: {e}\n\n"
+            "Try: /instructions add Your rule here"
+        )
 
 
 async def cmd_relink(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
