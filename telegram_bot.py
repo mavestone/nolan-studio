@@ -197,7 +197,8 @@ async def _expand_query_with_llm(question: str) -> list[str]:
 async def chat_transcripts_only(project_id: int, user_message: str,
                                  model: str = "haiku",
                                  candidate_pool: int = 120,
-                                 final_pool: int = 60) -> tuple[str, list[dict]]:
+                                 final_pool: int = 60,
+                                 chat_id: int | None = None) -> tuple[str, list[dict]]:
     """
     Smarter transcript-only chat:
       1. LLM expands the query into search terms (semantic, not literal)
@@ -317,7 +318,7 @@ async def chat_transcripts_only(project_id: int, user_message: str,
     )
 
     # Append any custom instructions the user has set for this chat
-    custom = _get_instructions(chat_id)
+    custom = _get_instructions(chat_id) if chat_id else ""
     if custom:
         system += f"\n\nCUSTOM INSTRUCTIONS FROM THE EDITOR:\n{custom}"
 
@@ -1770,7 +1771,7 @@ async def on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         keep_typing = asyncio.create_task(_keep_typing(ctx, chat_id))
         try:
             reply, cited = await asyncio.shield(
-                asyncio.create_task(chat_transcripts_only(pid, text, model=model))
+                asyncio.create_task(chat_transcripts_only(pid, text, model=model, chat_id=chat_id))
             )
         finally:
             keep_typing.cancel()
