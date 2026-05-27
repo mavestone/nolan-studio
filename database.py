@@ -616,6 +616,7 @@ async def get_theme_relevant_clips(project_id: int, query: str, max_clips: int =
                         for r in await cur.fetchall()]
             if segs:
                 result.append({
+                    'file_id':     fr['file_id'],
                     'filename':    fr['filename'],
                     'segments':    segs,
                     'match_count': fr['match_count'],
