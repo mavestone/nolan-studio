@@ -1469,15 +1469,20 @@ async def on_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     "Use /instructions to view or manage.",
                     parse_mode=ParseMode.HTML,
                 )
-            else:  # "set" — replace all, split pasted block into lines
-                new_lines = [l.strip() for l in text.splitlines() if l.strip()]
+            else:  # "set" — store the whole pasted block as ONE item
+                # Don't split by line — the whole paste is one instruction block.
+                # Use /instructions add to append additional separate rules.
+                existing = _get_instruction_lines(chat_id)
+                # Replace any existing single "paste block" entry (first item)
+                # or just set to [text] if starting fresh
+                new_lines = [text.strip()]
                 _save_instruction_lines(chat_id, new_lines)
-                body, keyboard = _build_instructions_message(chat_id)
+                preview = text[:200] + ("…" if len(text) > 200 else "")
                 await update.message.reply_text(
-                    f"✅ <b>Instructions replaced</b> ({len(new_lines)} item{'s' if len(new_lines)!=1 else ''}).\n\n"
-                    + body,
+                    f"✅ <b>Instructions saved.</b>\n\n"
+                    f"<i>{_escape_html(preview)}</i>\n\n"
+                    "Use /instructions to view or add more rules.",
                     parse_mode=ParseMode.HTML,
-                    reply_markup=keyboard,
                 )
             return
 
