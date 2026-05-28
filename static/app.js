@@ -1212,7 +1212,7 @@ function renderSearchResults(transcriptResults, sceneResults, q) {
       const highlighted = escHtml(r.text).replace(regex, '<mark class="hit">$1</mark>');
       const qEsc = escHtml(q);
       return `
-        <div class="search-result-row" onclick="openClip(${r.file_id}, '${qEsc.replace(/'/g, "\\'")}', ${r.start_time})">
+        <div class="search-result-row" data-id="${r.file_id}" onclick="openClip(${r.file_id}, '${qEsc.replace(/'/g, "\\'")}', ${r.start_time})">
           <div class="search-result-filename">
             <span>${escHtml(r.filename)}</span>
             <span class="search-result-time">${formatTime(r.start_time)}</span>
@@ -1235,7 +1235,7 @@ async function openClip(fileId, highlightQuery = null, jumpToTime = null) {
   activeFileId = fileId;
   activeHighlightQuery = highlightQuery;
 
-  document.querySelectorAll('.clip-row').forEach(el => {
+  document.querySelectorAll('.clip-row, .search-result-row').forEach(el => {
     el.classList.toggle('active', Number(el.dataset.id) === fileId);
   });
 
