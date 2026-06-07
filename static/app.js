@@ -700,12 +700,55 @@ async function addFolder() {
     await apiFetch(`/api/projects/${currentProjectId}/folders`, 'POST', { path: res.path });
     await loadBins();
   } catch (e) {
-    // -128 / "No folder selected" = user cancelled the picker — stay silent
     const msg = e.message || '';
-    if (!msg.includes('No folder selected') && !msg.includes('-128')) {
-      alert('Could not open folder picker:\n\n' + msg + '\n\nTry restarting Nolan.');
+    // User cancelled the native picker — silent
+    if (msg.includes('No folder selected') || msg.includes('-128')) return;
+    // Picker unavailable (permissions, headless, osascript missing) → text-input fallback
+    if (msg.includes('NO_PICKER') || msg.includes('Internal Server') || msg.includes('503')) {
+      addFolderManual();
+      return;
     }
+    alert('Could not open folder picker:\n\n' + msg + '\n\nTry typing the path manually using the text field.');
   }
+}
+
+async function addFolderManual() {
+  // Show an inline text-input row in the bins panel for typing a path
+  const list = document.getElementById('bins-list');
+  if (document.getElementById('manual-path-input')) return; // already showing
+
+  const row = document.createElement('div');
+  row.id = 'manual-path-input';
+  row.style.cssText = 'display:flex;gap:6px;padding:6px 8px;align-items:center';
+  row.innerHTML = `
+    <input id="manual-path-field" type="text" class="text-input"
+      placeholder="/Volumes/Drive/Footage" autocomplete="off" spellcheck="false"
+      style="flex:1;font-size:11px;font-family:var(--mono);padding:5px 8px"
+      onkeydown="if(event.key==='Enter')submitManualPath();if(event.key==='Escape')cancelManualPath()">
+    <button class="btn btn-primary" style="flex-shrink:0;padding:4px 10px;font-size:11px" onclick="submitManualPath()">Add</button>
+    <button class="btn btn-ghost"   style="flex-shrink:0;padding:4px 8px;font-size:11px"  onclick="cancelManualPath()">✕</button>
+  `;
+  list.prepend(row);
+  document.getElementById('manual-path-field').focus();
+}
+
+async function submitManualPath() {
+  const field = document.getElementById('manual-path-field');
+  const path = (field?.value || '').trim().replace(/\/+$/, '');
+  if (!path) return;
+  try {
+    await apiFetch(`/api/projects/${currentProjectId}/folders`, 'POST', { path });
+    cancelManualPath();
+    await loadBins();
+  } catch (e) {
+    field.style.outline = '1.5px solid var(--red, #f87171)';
+    field.title = e.message;
+    setTimeout(() => { field.style.outline = ''; field.title = ''; }, 3000);
+  }
+}
+
+function cancelManualPath() {
+  document.getElementById('manual-path-input')?.remove();
 }
 
 async function removeFolder(e, folderId) {

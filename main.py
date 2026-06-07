@@ -641,28 +641,39 @@ async def api_delete_project(project_id: int):
 
 @app.get("/api/pick-folder")
 async def pick_folder():
-    # `choose folder` is a StandardAdditions command — no Finder automation
-    # permission required, works on every Mac out of the box.
-    # (The old `tell application "Finder"` form requires an explicit
-    #  Automation permission grant which new Macs haven't approved.)
+    """
+    Open a native macOS folder picker via osascript.
+    Falls back gracefully — if osascript can't show the dialog (permissions,
+    headless session, etc.) we return a specific error code so the UI can
+    offer a text-input fallback instead.
+    """
     applescript = 'POSIX path of (choose folder with prompt "Select footage folder")'
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(
-        None,
-        lambda: subprocess.run(
-            ["osascript", "-e", applescript],
-            capture_output=True, text=True, timeout=120
+    try:
+        result = await loop.run_in_executor(
+            None,
+            lambda: subprocess.run(
+                ["osascript", "-e", applescript],
+                capture_output=True, text=True, timeout=120,
+                env={**os.environ, "PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin:" + os.environ.get("PATH", "")},
+            )
         )
-    )
+    except FileNotFoundError:
+        raise HTTPException(503, "NO_PICKER: osascript not found — type the folder path manually")
+    except subprocess.TimeoutExpired:
+        raise HTTPException(503, "NO_PICKER: folder picker timed out — type the folder path manually")
+    except Exception as exc:
+        log.warning(f"pick-folder subprocess error: {exc}")
+        raise HTTPException(503, f"NO_PICKER: {exc}")
+
     path = result.stdout.strip()
     if not path:
         err = result.stderr.strip()
-        # User cancelled → -128 is the AppleScript "user cancelled" error
         if not err or "-128" in err:
             raise HTTPException(400, "No folder selected")
         log.warning(f"pick-folder osascript error: {err}")
-        raise HTTPException(500, f"Folder picker failed: {err}")
-    # osascript returns paths with trailing slash — normalise
+        # Non-zero exit without -128 usually means a display/permission issue
+        raise HTTPException(503, f"NO_PICKER: {err}")
     return {"path": path.rstrip("/")}
 
 
