@@ -421,6 +421,11 @@
 
           <div class="settings-section-desc" style="margin-top:14px">Other one-off operations:</div>
           <button class="btn btn-ghost" onclick="reclassifyScenes()">Re-classify all scenes</button>
+          <button class="btn btn-ghost" id="reanalyze-scenes-btn" onclick="reanalyzeProjectScenes()" title="Uses Claude vision to identify specific objects in every frame — enables searching 'shoe', 'water', 'grass', etc.">
+            <svg width="11" height="11" viewBox="0 0 11 11" fill="none" style="margin-right:4px"><path d="M5.5 1L7 4.5H10.5L7.7 6.7 8.8 10.5 5.5 8.2 2.2 10.5 3.3 6.7.5 4.5H4L5.5 1z" fill="currentColor" opacity="0.85"/></svg>
+            AI visual analysis (whole project)
+          </button>
+          <div id="reanalyze-progress" style="display:none;font-size:11px;color:var(--text3);margin-top:4px"></div>
           <span id="settings-status" class="settings-status"></span>
         </div>
       </div>
@@ -430,6 +435,6 @@
   <!-- ══ TOAST ══ -->
   <div id="completion-toast" class="completion-toast"></div>
 
-  <script src="/static/app.js?v=41"></script>
+  <script src="/static/app.js?v=42"></script>
 </body>
 </html>

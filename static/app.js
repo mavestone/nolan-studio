@@ -1510,10 +1510,19 @@ function sceneCardHtml(s, filenameOverride) {
        </div>`
     : '';
 
-  // Tags row (still useful for desert/nature/night etc.)
-  const tags = (s.tags || []).slice(0, 3).map(t =>
-    `<span class="scene-tag">${escHtml(t)}</span>`
-  ).join('');
+  // Visual content tags — specific objects identified by AI vision
+  const visualTags = s.visual_content
+    ? s.visual_content.split(',')
+        .map(t => t.trim()).filter(t => t.length > 1)
+        .slice(0, 6)
+        .map(t => `<span class="scene-visual-tag">${escHtml(t)}</span>`)
+        .join('')
+    : '';
+  // OpenCV heuristic tags (fallback)
+  const heuristicTags = !s.visual_content
+    ? (s.tags || []).slice(0, 3).map(t => `<span class="scene-tag">${escHtml(t)}</span>`).join('')
+    : '';
+  const tags = visualTags || heuristicTags;
 
   const footer = filenameOverride
     ? `<div class="scene-card-footer">
@@ -1523,7 +1532,7 @@ function sceneCardHtml(s, filenameOverride) {
 
   return `
     <div class="scene-card" data-time="${s.start_time}" data-file="${s.file_id || ''}"
-         onclick="jumpToSceneCard(this)" title="${formatTime(s.start_time)} – ${formatTime(s.end_time)}${s.description ? ' · ' + s.description : ''}">
+         onclick="jumpToSceneCard(this)" title="${formatTime(s.start_time)} – ${formatTime(s.end_time)}${s.description ? ' · ' + s.description : ''}${s.visual_content ? '\n' + s.visual_content : ''}">
       <div class="scene-card-img">
         ${imgHtml}
         ${sizeBadge}
@@ -1535,6 +1544,47 @@ function sceneCardHtml(s, filenameOverride) {
       ${tags ? `<div class="scene-card-tags">${tags}</div>` : ''}
       ${footer}
     </div>`;
+}
+
+// AI visual analysis for the whole project — fills visual_content (object tags)
+async function reanalyzeProjectScenes() {
+  if (!currentProjectId) { showToast('Open a project first.', 3000); return; }
+  if (offlineMode) { showToast('Toggle ONLINE to use AI visual analysis.', 4000); return; }
+
+  const btn      = document.getElementById('reanalyze-scenes-btn');
+  const progress = document.getElementById('reanalyze-progress');
+
+  try {
+    const res = await apiFetch(`/api/projects/${currentProjectId}/reanalyze-scenes`, 'POST', {});
+    if (!res.queued) { showToast(res.message || 'Already running', 3000); return; }
+
+    if (btn)      { btn.disabled = true; btn.innerHTML = '⏳ Analysing…'; }
+    if (progress) { progress.style.display = 'block'; progress.textContent = 'Starting…'; }
+
+    const poll = setInterval(async () => {
+      try {
+        const p = await apiFetch(`/api/projects/${currentProjectId}/reanalyze-scenes/progress`);
+        if (p.total > 0 && progress) {
+          progress.textContent = `Analysing scenes: ${p.done}/${p.total}${p.errors ? ' · ' + p.errors + ' skipped' : ''}`;
+        }
+        if (!p.running) {
+          clearInterval(poll);
+          showToast(`✓ Visual analysis complete — ${p.done} scenes tagged`, 5000);
+          if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<svg width="11" height="11" viewBox="0 0 11 11" fill="none" style="margin-right:4px"><path d="M5.5 1L7 4.5H10.5L7.7 6.7 8.8 10.5 5.5 8.2 2.2 10.5 3.3 6.7.5 4.5H4L5.5 1z" fill="currentColor" opacity="0.85"/></svg>AI visual analysis (whole project)';
+          }
+          if (progress) { progress.style.display = 'none'; }
+          // Refresh scenes if they're visible
+          if (activeFileId) { delete scenesCache[activeFileId]; await renderSceneGrid(activeFileId, sceneGridFilter); }
+        }
+      } catch (_) {}
+    }, 2000);
+  } catch (e) {
+    showToast('Failed: ' + e.message, 3000);
+    if (btn)      { btn.disabled = false; btn.innerHTML = 'AI visual analysis (whole project)'; }
+    if (progress) { progress.style.display = 'none'; }
+  }
 }
 
 // AI refine — runs Claude vision on all scenes for the active clip

@@ -231,17 +231,19 @@ This scene {'CONTAINS spoken dialogue' if has_dialogue else 'has NO spoken dialo
 Respond with ONLY a JSON object — no prose, no markdown fence — using these exact keys and value vocabularies:
 
 {{
-  "shot_size":   "extreme_close_up | close_up | medium | full | wide | extreme_wide | aerial",
-  "shot_angle":  "eye_level | low | high | dutch | over_shoulder | pov",
-  "setting":     "indoor | outdoor",
-  "location":    "<2-4 word specific location: desert dune, kitchen interior, car cabin, beach, hotel lobby, etc.>",
-  "description": "<one sentence describing the shot composition>"
+  "shot_size":      "extreme_close_up | close_up | medium | full | wide | extreme_wide | aerial",
+  "shot_angle":     "eye_level | low | high | dutch | over_shoulder | pov",
+  "setting":        "indoor | outdoor",
+  "location":       "<2-4 word specific location: desert dune, kitchen interior, car cabin, beach, hotel lobby, etc.>",
+  "description":    "<one sentence describing the shot composition and action>",
+  "visual_content": "<comma-separated list of 8-20 specific nouns/adjectives that are VISIBLE in this frame — objects, materials, body parts, animals, vehicles, nature elements, textures, clothing items, etc. Be very specific. Examples: shoe, grass, hand, watch, sand, camel, water, leather jacket, phone, coffee cup, road, palm tree, ring, beard, tears, sunglasses>"
 }}
 
 Definitions:
 - shot_size: extreme_close_up = eyes/lips fill frame; close_up = head/shoulders; medium = waist-up; full = whole body; wide = body in environment; extreme_wide = environment dominates; aerial = top-down/bird's eye view from above (typically drone)
 - shot_angle: low = camera below subject looking up; high = camera above looking down; dutch = noticeable tilt; over_shoulder = OTS framing; pov = first person view; eye_level otherwise
-- setting + location should agree (indoor = "kitchen", "office"; outdoor = "desert", "beach")"""
+- setting + location should agree (indoor = "kitchen", "office"; outdoor = "desert", "beach")
+- visual_content: list EVERYTHING specific you can see — this powers search, so the more specific the better"""
 
         system = (
             "You are a professional film analyst classifying single frames. "
@@ -265,12 +267,13 @@ Definitions:
 
         # Normalise — accept slight variations
         normalised = {
-            "shot_size":   _norm_enum(data.get("shot_size"),  SHOT_SIZES),
-            "shot_angle":  _norm_enum(data.get("shot_angle"), SHOT_ANGLES),
-            "setting":     _norm_enum(data.get("setting"),    {"indoor", "outdoor"}),
-            "location":    (data.get("location") or "").strip()[:80] or None,
-            "description": (data.get("description") or "").strip()[:240] or None,
-            "ai_classified": True,
+            "shot_size":      _norm_enum(data.get("shot_size"),  SHOT_SIZES),
+            "shot_angle":     _norm_enum(data.get("shot_angle"), SHOT_ANGLES),
+            "setting":        _norm_enum(data.get("setting"),    {"indoor", "outdoor"}),
+            "location":       (data.get("location") or "").strip()[:80] or None,
+            "description":    (data.get("description") or "").strip()[:240] or None,
+            "visual_content": (data.get("visual_content") or "").strip()[:500] or None,
+            "ai_classified":  True,
         }
         # Derive legacy shot_type from shot_size
         normalised["shot_type"] = _shot_type_from_size(normalised["shot_size"], has_dialogue)
@@ -368,7 +371,7 @@ def detect_scenes(
                 ai = classify_shot_with_claude(str(thumb_abs), has_dialogue)
                 if ai:
                     # AI fields take priority; OpenCV tags still useful
-                    for k in ("shot_size", "shot_angle", "setting", "location", "description"):
+                    for k in ("shot_size", "shot_angle", "setting", "location", "description", "visual_content"):
                         if ai.get(k):
                             cls[k] = ai[k]
                     cls["shot_type"]     = ai.get("shot_type") or cls.get("shot_type")

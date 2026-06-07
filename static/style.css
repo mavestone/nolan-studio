@@ -1714,6 +1714,17 @@ html, body {
   letter-spacing: 0.04em;
 }
 
+/* Visual content tags — AI-identified objects in frame */
+.scene-visual-tag {
+  background: rgba(240,165,0,0.08);
+  border: 1px solid rgba(240,165,0,0.20);
+  border-radius: 2px;
+  padding: 1px 4px;
+  font-size: 8px;
+  color: rgba(240,165,0,0.7);
+  letter-spacing: 0.03em;
+}
+
 /* ── Detail tabs ── */
 .detail-tabs {
   display: flex;

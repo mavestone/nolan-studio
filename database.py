@@ -145,6 +145,8 @@ async def init_db():
             await db.execute("ALTER TABLE scenes ADD COLUMN description TEXT")   # one-sentence AI description
         if "ai_classified" not in _scols:
             await db.execute("ALTER TABLE scenes ADD COLUMN ai_classified INTEGER DEFAULT 0")  # 1 if Claude vision was used
+        if "visual_content" not in _scols:
+            await db.execute("ALTER TABLE scenes ADD COLUMN visual_content TEXT")  # comma-sep objects: "shoe, sand, hand, water, grass"
         # Migrate: add poster_path, primary_shot_type, scene_tags to files table
         async with db.execute("PRAGMA table_info(files)") as _cur:
             _cols = {row[1] for row in await _cur.fetchall()}
@@ -677,14 +679,16 @@ async def save_scenes(file_id: int, scenes: list[dict]) -> None:
                 """INSERT INTO scenes (
                     file_id, scene_num, start_time, end_time, thumbnail_path,
                     shot_type, tags,
-                    shot_size, shot_angle, roll_type, setting, location, description, ai_classified
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    shot_size, shot_angle, roll_type, setting, location, description, ai_classified,
+                    visual_content
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     file_id, s["scene_num"], s["start_time"], s["end_time"],
                     s.get("thumbnail_path"), s.get("shot_type"), tags_json,
                     s.get("shot_size"), s.get("shot_angle"), s.get("roll_type"),
                     s.get("setting"), s.get("location"), s.get("description"),
                     1 if s.get("ai_classified") else 0,
+                    s.get("visual_content"),
                 ),
             )
         await db.commit()
@@ -695,7 +699,7 @@ async def update_scene_classification(scene_id: int, data: dict) -> None:
     import json
     fields = []
     values = []
-    for k in ("shot_size", "shot_angle", "roll_type", "setting", "location", "description"):
+    for k in ("shot_size", "shot_angle", "roll_type", "setting", "location", "description", "visual_content"):
         if k in data and data[k] is not None:
             fields.append(f"{k} = ?")
             values.append(data[k])
@@ -736,7 +740,7 @@ async def get_scenes(file_id: int) -> list[dict]:
 
 
 async def search_project_scenes(project_id: int, q: str) -> list[dict]:
-    """Search scenes across all attributes: shot_type, shot_size, shot_angle, roll_type, setting, location, description, tags."""
+    """Search scenes across all attributes: shot_type, shot_size, shot_angle, roll_type, setting, location, description, tags, visual_content."""
     import json
     q_lower = q.lower().strip()
     like = f"%{q_lower}%"
@@ -756,10 +760,11 @@ async def search_project_scenes(project_id: int, q: str) -> list[dict]:
                   OR LOWER(s.location)   LIKE ?
                   OR LOWER(s.description) LIKE ?
                   OR LOWER(s.tags)       LIKE ?
+                  OR LOWER(s.visual_content) LIKE ?
               )
             ORDER BY f.filename, s.scene_num
             LIMIT 200
-        """, (project_id, like, like, like, like, like, like, like, like)) as cur:
+        """, (project_id, like, like, like, like, like, like, like, like, like)) as cur:
             rows = await cur.fetchall()
     result = []
     for r in rows:

@@ -800,6 +800,81 @@ async def admin_reclassify(background_tasks: BackgroundTasks):
     return {"queued": True}
 
 
+@app.post("/api/projects/{project_id}/reanalyze-scenes")
+async def reanalyze_scenes(project_id: int, background_tasks: BackgroundTasks):
+    """
+    Re-run Claude vision on every scene thumbnail in this project.
+    Fills in visual_content (objects visible in frame), description, and location.
+    Returns immediately; runs in background. Poll job_progress["reanalyze_{project_id}"].
+    """
+    key = f"reanalyze_{project_id}"
+    if job_progress.get(key, {}).get("running"):
+        return {"queued": False, "message": "Already running"}
+
+    from analyzer import _anthropic_client, _claude_available
+    if not (_anthropic_client or _claude_available):
+        raise HTTPException(status_code=400, detail="AI unavailable — set ANTHROPIC_API_KEY in settings")
+
+    background_tasks.add_task(_reanalyze_scenes_bg, project_id)
+    return {"queued": True}
+
+
+async def _reanalyze_scenes_bg(project_id: int):
+    """Background worker: re-classify all scenes with Claude vision."""
+    import aiosqlite
+    from database import DB_PATH
+    key = f"reanalyze_{project_id}"
+    job_progress[key] = {"running": True, "done": 0, "total": 0, "errors": 0}
+
+    try:
+        # Gather all scenes with thumbnails for this project
+        async with aiosqlite.connect(DB_PATH, timeout=10) as db:
+            db.row_factory = aiosqlite.Row
+            await db.execute("PRAGMA journal_mode=WAL")
+            async with db.execute("""
+                SELECT s.id, s.thumbnail_path, s.roll_type
+                FROM scenes s
+                JOIN files f ON s.file_id = f.id
+                WHERE f.project_id = ? AND s.thumbnail_path IS NOT NULL
+                ORDER BY f.filename, s.scene_num
+            """, (project_id,)) as cur:
+                rows = [dict(r) for r in await cur.fetchall()]
+
+        job_progress[key]["total"] = len(rows)
+        log.info(f"[reanalyze] project {project_id}: {len(rows)} scenes to classify")
+
+        loop = asyncio.get_event_loop()
+        for row in rows:
+            thumb_abs = Path("static") / row["thumbnail_path"]
+            has_dialogue = row.get("roll_type") == "a_roll"
+            try:
+                ai = await loop.run_in_executor(
+                    None,
+                    lambda p=str(thumb_abs), d=has_dialogue: classify_shot_with_claude(p, d)
+                )
+                if ai:
+                    await update_scene_classification(row["id"], ai)
+                    job_progress[key]["done"] += 1
+                else:
+                    job_progress[key]["errors"] += 1
+            except Exception as e:
+                log.debug(f"[reanalyze] scene {row['id']} failed: {e}")
+                job_progress[key]["errors"] += 1
+
+        log.info(f"[reanalyze] project {project_id}: done={job_progress[key]['done']}, errors={job_progress[key]['errors']}")
+    except Exception as e:
+        log.exception(f"[reanalyze] fatal: {e}")
+    finally:
+        job_progress[key]["running"] = False
+
+
+@app.get("/api/projects/{project_id}/reanalyze-scenes/progress")
+async def reanalyze_progress(project_id: int):
+    """Poll re-analyse progress."""
+    key = f"reanalyze_{project_id}"
+    return job_progress.get(key, {"running": False, "done": 0, "total": 0, "errors": 0})
+
+
 @app.get("/api/admin/version")
 async def admin_version():
     """Return the current git commit + the latest available on origin/main."""
