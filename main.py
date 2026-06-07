@@ -93,6 +93,7 @@ async def reclassify_all_scenes():
         return
 
     log.info(f"Reclassify: re-running setting/shot heuristic on {len(rows)} scenes…")
+    job_progress["__reclassify__"] = {"running": True, "done": 0, "total": len(rows)}
     loop = asyncio.get_event_loop()
     done = 0
     async with aiosqlite.connect(DB_PATH, timeout=10) as db:
@@ -113,12 +114,14 @@ async def reclassify_all_scenes():
                     r["id"],
                 ))
                 done += 1
+                job_progress["__reclassify__"]["done"] = done
                 if done % 200 == 0:
                     await db.commit()
                     log.info(f"Reclassify: {done}/{len(rows)}")
             except Exception as e:
                 log.debug(f"Reclassify scene {r['id']} failed: {e}")
         await db.commit()
+    job_progress["__reclassify__"]["running"] = False
     log.info(f"Reclassify: {done} scenes updated")
 
     # Refresh per-file summaries
@@ -137,8 +140,14 @@ async def cleanup_db_hidden_and_dupes():
     """
     One-off cleanup on every startup:
       • DELETE rows whose filename starts with `._` (macOS metadata sidecars)
-      • DELETE rows whose path no longer exists AND another row with same filename DOES exist
-        (i.e. the file moved — keep the entry that still resolves on disk)
+      • SMART-MERGE duplicate filename entries within the same project:
+          - If the "missing path" entry has transcripts (it was the imported/processed one),
+            UPDATE its path to the valid local path — then delete the redundant pending entry.
+          - If the "missing path" entry has no transcripts, just delete it.
+        This handles the import-then-rescan pattern: importing a .nolanproj gives processed
+        clips with the sender's paths; scanning locally creates pending duplicates with local
+        paths. Without this, the processed entry (wrong path) gets deleted and all clips
+        appear as pending on next launch.
     """
     import aiosqlite, os
     from database import DB_PATH
@@ -168,17 +177,51 @@ async def cleanup_db_hidden_and_dupes():
             groups[(r["project_id"], r["filename"])].append(r)
 
         dupes_removed = 0
+        dupes_relinked = 0
         for (_proj, _fname), entries in groups.items():
             existing = [r for r in entries if r["path"] and os.path.exists(r["path"])]
             missing  = [r for r in entries if not (r["path"] and os.path.exists(r["path"]))]
-            # If at least one entry has a valid on-disk path, delete the broken ones
+
             if existing and missing:
-                for r in missing:
-                    await db.execute("DELETE FROM files WHERE id = ?", (r["id"],))
-                    dupes_removed += 1
-            # If multiple valid entries (true dupes), keep the lowest id
+                # Check each "missing path" entry: does it have transcript segments?
+                # If yes → it's the valuable processed copy; relink its path to the
+                # valid local path and delete the redundant pending duplicate.
+                # If no  → it's just a stale import stub; delete it.
+                for m in missing:
+                    async with db.execute(
+                        "SELECT COUNT(*) FROM segments WHERE file_id = ?", (m["id"],)
+                    ) as seg_cur:
+                        (seg_count,) = await seg_cur.fetchone()
+
+                    if seg_count > 0:
+                        # Processed copy with broken path — relink to the best valid local path
+                        best_local = existing[0]["path"]
+                        await db.execute(
+                            "UPDATE files SET path = ? WHERE id = ?", (best_local, m["id"])
+                        )
+                        # Delete the redundant "pending" local entry
+                        for e in existing:
+                            async with db.execute(
+                                "SELECT COUNT(*) FROM segments WHERE file_id = ?", (e["id"],)
+                            ) as ec:
+                                (ec_count,) = await ec.fetchone()
+                            if ec_count == 0:
+                                await db.execute("DELETE FROM files WHERE id = ?", (e["id"],))
+                                dupes_removed += 1
+                        dupes_relinked += 1
+                    else:
+                        # Stale import stub with no data — safe to delete
+                        await db.execute("DELETE FROM files WHERE id = ?", (m["id"],))
+                        dupes_removed += 1
+
+            # If multiple valid entries (true dupes), keep the one with most data (segments)
             elif len(existing) > 1:
-                for r in existing[1:]:
+                async def _seg_count(db_, fid):
+                    async with db_.execute("SELECT COUNT(*) FROM segments WHERE file_id = ?", (fid,)) as c_:
+                        return (await c_.fetchone())[0]
+                scored = [(await _seg_count(db, r["id"]), r) for r in existing]
+                scored.sort(key=lambda x: -x[0])
+                for _, r in scored[1:]:
                     await db.execute("DELETE FROM files WHERE id = ?", (r["id"],))
                     dupes_removed += 1
 
@@ -186,8 +229,10 @@ async def cleanup_db_hidden_and_dupes():
 
     if hidden_removed:
         log.info(f"Cleanup: removed {hidden_removed} hidden/metadata file rows")
+    if dupes_relinked:
+        log.info(f"Cleanup: relinked {dupes_relinked} processed clips to their local paths")
     if dupes_removed:
-        log.info(f"Cleanup: removed {dupes_removed} duplicate/moved-file rows")
+        log.info(f"Cleanup: removed {dupes_removed} stale duplicate rows")
 
 
 async def migrate_error_clips_to_silent():

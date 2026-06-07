@@ -835,20 +835,22 @@ function startPolling() {
     const anyActive = files.some(f =>
       ['queued', 'transcribing', 'analyzing', 'transcribed'].includes(jobs[f.id]?.status || f.status)
     );
+    const reclassifying = jobs['__reclassify__']?.running;
 
     if (anyActive) {
       wasProcessing = true;
-    } else if (wasProcessing) {
+    } else if (wasProcessing && !reclassifying) {
       wasProcessing = false;
       stopPolling();
       hideNowProcessing();
       const stopBtn = document.getElementById('stop-btn');
       if (stopBtn) { stopBtn.style.display = 'none'; stopBtn.disabled = false; }
       showCompletionBanner();
-    } else {
+    } else if (!anyActive && !reclassifying) {
       stopPolling();
       hideNowProcessing();
     }
+    // If only reclassifying: keep polling, updateNowProcessing already shows it
   }, 2200);
 }
 
@@ -1720,6 +1722,29 @@ function updateNowProcessing() {
     ['transcribing', 'extracting_audio', 'analyzing', 'transcribed', 'silent']
     .includes(allJobs[f.id]?.status || f.status)
   );
+
+  // Background scene reclassify (runs on startup, no clip association)
+  const reclassify = allJobs['__reclassify__'];
+  if (reclassify?.running) {
+    if (!queued.length && !current) {
+      // Show reclassify as the active task
+      document.getElementById('now-processing').style.display = 'block';
+      const pct = reclassify.total > 0 ? Math.round(reclassify.done / reclassify.total * 100) : null;
+      document.getElementById('np-stage').textContent = 'CLASSIFYING SCENES';
+      document.getElementById('np-pct').textContent = pct != null ? `${pct}%` : '';
+      document.getElementById('np-filename').textContent = `${reclassify.done} / ${reclassify.total} scenes`;
+      document.getElementById('np-detail').textContent = 'Detecting shot types, indoor/outdoor, and visual content…';
+      document.getElementById('np-count').textContent = '';
+      const bar = document.getElementById('np-bar-fill');
+      if (bar) {
+        if (pct != null) { bar.style.width = pct + '%'; bar.classList.remove('indeterminate'); }
+        else             { bar.style.width = '40%';     bar.classList.add('indeterminate'); }
+      }
+      // Keep polling so the bar updates
+      if (!pollTimer) startPolling();
+      return;
+    }
+  }
 
   if (!queued.length && !current) { hideNowProcessing(); return; }
 
