@@ -350,7 +350,16 @@ async def get_project_files(project_id: int) -> list:
     async with _db() as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("""
-            SELECT f.*, a.story_value, a.summary
+            SELECT f.*, a.story_value, a.summary,
+                   CASE WHEN EXISTS (
+                       SELECT 1 FROM scenes s
+                       WHERE s.file_id = f.id AND s.thumbnail_path IS NOT NULL
+                   ) THEN 1 ELSE 0 END AS has_thumbnail,
+                   CASE WHEN EXISTS (
+                       SELECT 1 FROM scenes s
+                       WHERE s.file_id = f.id
+                         AND s.visual_content IS NOT NULL AND s.visual_content != ''
+                   ) THEN 1 ELSE 0 END AS has_ai_detect
             FROM files f
             LEFT JOIN analysis a ON a.file_id = f.id
             WHERE f.project_id = ?

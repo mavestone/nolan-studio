@@ -1015,6 +1015,28 @@ function parseTags(raw) {
   try { return JSON.parse(raw); } catch (_) { return []; }
 }
 
+// ── Clip status helpers ──
+// A clip is "Processed" only when it has BOTH a thumbnail (scene detection)
+// AND AI visual detection (visual_content tags). Anything short of that is
+// "Pending" — it still needs a thumbnail or the AI visual pass.
+function liveStatusOf(f, jobs) {
+  return (jobs && jobs[f.id]?.status) || f.status;
+}
+function isInProgress(f, jobs) {
+  return ['queued', 'transcribing', 'extracting_audio', 'analyzing', 'transcribed']
+    .includes(liveStatusOf(f, jobs));
+}
+function isFullyProcessed(f, jobs) {
+  const s = liveStatusOf(f, jobs);
+  if (s !== 'done' && s !== 'silent') return false;
+  return !!f.has_thumbnail && !!f.has_ai_detect;
+}
+function isPending(f, jobs) {
+  // Anything not fully processed — missing a thumbnail, missing AI detect,
+  // never started, errored, or still in progress.
+  return !isFullyProcessed(f, jobs);
+}
+
 function renderClipGrid(files = allFiles, jobs = allJobs) {
   const el = document.getElementById('clip-grid');
 
@@ -1022,10 +1044,8 @@ function renderClipGrid(files = allFiles, jobs = allJobs) {
   el.classList.toggle('view-gallery', viewMode === 'gallery');
 
   let filtered = files;
-  if (activeFilter === 'done')    filtered = files.filter(f => ['done', 'transcribed'].includes(jobs[f.id]?.status || f.status));
-  if (activeFilter === 'silent')  filtered = files.filter(f => (jobs[f.id]?.status || f.status) === 'silent');
-  if (activeFilter === 'pending') filtered = files.filter(f => (jobs[f.id]?.status || f.status) === 'pending');
-  if (activeFilter === 'error')   filtered = files.filter(f => (jobs[f.id]?.status || f.status) === 'error');
+  if (activeFilter === 'done')    filtered = files.filter(f => isFullyProcessed(f, jobs));
+  if (activeFilter === 'pending') filtered = files.filter(f => isPending(f, jobs));
 
   const countEl = document.getElementById('pool-count');
   if (countEl) countEl.textContent = filtered.length ? `${filtered.length} clips` : '';
@@ -1043,14 +1063,12 @@ function renderClipGrid(files = allFiles, jobs = allJobs) {
   let html = '';
   if (sortMode === 'status') {
     const sections = [
-      { key: 'done',        label: 'PROCESSED',         statuses: ['done', 'transcribed'] },
-      { key: 'active',      label: 'IN PROGRESS',       statuses: ['queued', 'transcribing', 'extracting_audio', 'analyzing'] },
-      { key: 'silent',      label: 'SILENT (NO SPEECH)', statuses: ['silent'] },
-      { key: 'pending',     label: 'PENDING',           statuses: ['pending'] },
-      { key: 'error',       label: 'ERRORS',            statuses: ['error'] },
+      { key: 'done',    label: 'PROCESSED',   test: f => isFullyProcessed(f, jobs) },
+      { key: 'active',  label: 'IN PROGRESS', test: f => isInProgress(f, jobs) },
+      { key: 'pending', label: 'PENDING',     test: f => isPending(f, jobs) && !isInProgress(f, jobs) },
     ];
     for (const section of sections) {
-      const group = sorted.filter(f => section.statuses.includes(jobs[f.id]?.status || f.status));
+      const group = sorted.filter(section.test);
       if (!group.length) continue;
       html += `<div class="clip-section-header">${section.label} · ${group.length}</div>`;
       html += group.map(f => clipRowHtml(f, jobs[f.id]?.status || f.status)).join('');
