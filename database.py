@@ -15,6 +15,7 @@ async def _db():
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("PRAGMA journal_mode=WAL")
         await db.execute("PRAGMA busy_timeout=10000")  # 10 s
+        await db.execute("PRAGMA foreign_keys=ON")      # make ON DELETE CASCADE actually fire
         yield db
 
 

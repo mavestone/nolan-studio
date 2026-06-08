@@ -69,23 +69,30 @@ async def reset_stuck_states():
         await db.commit()
 
 
-async def reclassify_all_scenes():
+async def reclassify_all_scenes(force: bool = False):
     """
-    Re-run the (improved) OpenCV scene classifier on every existing scene that
-    has a thumbnail. Fixes indoor/outdoor on scenes detected before v36.
-    Skips AI-classified scenes (those have richer location data we shouldn't overwrite).
+    Re-run the OpenCV scene classifier on scenes that have NEVER been classified
+    (shot_size IS NULL). Previously this re-ran on EVERY startup over all non-AI
+    scenes, which thrashed CPU/DB on every launch. Now it only touches genuinely
+    unclassified scenes unless `force=True` (manual admin trigger).
     """
     import aiosqlite, json
     from database import DB_PATH
     from pathlib import Path
     from scene_detector import _classify_shot_opencv
 
+    where = (
+        "thumbnail_path IS NOT NULL AND (ai_classified IS NULL OR ai_classified = 0)"
+        if force else
+        "thumbnail_path IS NOT NULL AND (ai_classified IS NULL OR ai_classified = 0) "
+        "AND (shot_size IS NULL OR shot_size = '')"
+    )
     async with aiosqlite.connect(DB_PATH, timeout=10) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute("""
+        async with db.execute(f"""
             SELECT id, file_id, thumbnail_path
             FROM scenes
-            WHERE thumbnail_path IS NOT NULL AND (ai_classified IS NULL OR ai_classified = 0)
+            WHERE {where}
         """) as cur:
             rows = [dict(r) for r in await cur.fetchall()]
 
@@ -134,6 +141,83 @@ async def reclassify_all_scenes():
         if scs:
             await update_file_scene_summary(fid, scs)
     log.info(f"Reclassify: file summaries refreshed for {len(fids)} files")
+
+
+async def purge_orphaned_rows():
+    """
+    Remove rows whose parent project no longer exists. SQLite has foreign keys
+    OFF by default, so historically deleting a project left all its files,
+    scenes, segments and analysis behind — bloating the DB and slowing every
+    query. This sweeps those orphans (and now FK cascade prevents new ones).
+    """
+    import aiosqlite
+    from database import DB_PATH
+    async with aiosqlite.connect(DB_PATH, timeout=10) as db:
+        await db.execute("PRAGMA foreign_keys=ON")
+        # Find orphaned file ids (project deleted)
+        async with db.execute(
+            "SELECT id FROM files WHERE project_id IS NOT NULL "
+            "AND project_id NOT IN (SELECT id FROM projects)"
+        ) as cur:
+            orphan_ids = [r[0] for r in await cur.fetchall()]
+
+        if not orphan_ids:
+            return
+
+        log.info(f"Orphan purge: removing {len(orphan_ids)} files from deleted projects…")
+        # Delete in chunks to keep statements small
+        CHUNK = 500
+        for i in range(0, len(orphan_ids), CHUNK):
+            batch = orphan_ids[i:i + CHUNK]
+            qmarks = ",".join("?" * len(batch))
+            for tbl, col in (("scenes", "file_id"), ("segments", "file_id"),
+                             ("analysis", "file_id"), ("files", "id")):
+                try:
+                    await db.execute(f"DELETE FROM {tbl} WHERE {col} IN ({qmarks})", batch)
+                except Exception as e:
+                    log.debug(f"Orphan purge {tbl}: {e}")
+        await db.commit()
+        # Reclaim disk space
+        try:
+            await db.execute("VACUUM")
+        except Exception:
+            pass
+    log.info(f"Orphan purge: done ({len(orphan_ids)} files removed)")
+
+
+async def backfill_missing_posters():
+    """
+    Files that already have detected scenes but no poster_path get one set from
+    their first scene thumbnail. Cheap — no ffmpeg, just a DB update — so it
+    fixes 'no thumbnail' clips that DID get scene detection but never had their
+    poster wired up.
+    """
+    import aiosqlite
+    from database import DB_PATH
+    async with aiosqlite.connect(DB_PATH, timeout=10) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("""
+            SELECT f.id AS file_id,
+                   (SELECT s.thumbnail_path FROM scenes s
+                    WHERE s.file_id = f.id AND s.thumbnail_path IS NOT NULL
+                    ORDER BY s.scene_num LIMIT 1) AS thumb
+            FROM files f
+            WHERE (f.poster_path IS NULL OR f.poster_path = '')
+              AND EXISTS (SELECT 1 FROM scenes s2
+                          WHERE s2.file_id = f.id AND s2.thumbnail_path IS NOT NULL)
+        """) as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
+
+        fixed = 0
+        for r in rows:
+            if r["thumb"]:
+                await db.execute("UPDATE files SET poster_path = ? WHERE id = ?",
+                                 (r["thumb"], r["file_id"]))
+                fixed += 1
+        if fixed:
+            await db.commit()
+    if fixed:
+        log.info(f"Poster backfill: set posters on {fixed} clips from existing scenes")
 
 
 async def cleanup_db_hidden_and_dupes():
@@ -328,14 +412,29 @@ async def backfill_scene_classifications():
         log.info(f"Backfill: file shot summaries done")
 
 
+async def _startup_maintenance():
+    """
+    Run one-off maintenance SEQUENTIALLY so the tasks don't thrash the DB and
+    CPU against each other (the old code fired 4 concurrent tasks every boot).
+    Order matters: purge orphans first (shrinks everything), then dedup, then
+    cheap poster backfill, then the guarded reclassify (no-op once classified).
+    """
+    try:
+        await purge_orphaned_rows()
+        await cleanup_db_hidden_and_dupes()
+        await migrate_error_clips_to_silent()
+        await backfill_missing_posters()
+        await backfill_scene_classifications()
+        await reclassify_all_scenes()   # guarded: only unclassified scenes
+    except Exception as e:
+        log.warning(f"Startup maintenance error: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
     await reset_stuck_states()
-    asyncio.create_task(backfill_scene_classifications())
-    asyncio.create_task(migrate_error_clips_to_silent())
-    asyncio.create_task(cleanup_db_hidden_and_dupes())
-    asyncio.create_task(reclassify_all_scenes())
+    asyncio.create_task(_startup_maintenance())
 
     # ── Telegram bot (optional, if token is set in settings.json) ─────
     settings = _load_settings()
@@ -756,18 +855,34 @@ async def api_batch_process(project_id: int, req: BatchRequest, background_tasks
     if to_transcribe:
         background_tasks.add_task(run_batch_analysis, to_transcribe, project_id)
 
-    # 2. Done/silent clips missing scenes — queue scene-only jobs to fill thumbnails
+    # 2. Done/silent clips missing scenes — queue scene-only jobs to fill thumbnails.
+    #    Skip clips whose file is missing on disk (can't extract a thumbnail) and
+    #    clips that already have scenes (their poster is backfilled at startup).
+    from fcpxml import _resolve_actual_path
     to_scene_only = []
+    skipped_missing = 0
     for f in files:
         if f["status"] not in ("done", "silent"):
             continue
-        if not await has_scenes(f["id"]):
-            to_scene_only.append(f)
+        if await has_scenes(f["id"]):
+            continue
+        real = _resolve_actual_path(f["path"])
+        if not real or not os.path.exists(real):
+            skipped_missing += 1
+            continue
+        to_scene_only.append(f)
+
+    if skipped_missing:
+        log.info(f"Scene backfill: skipping {skipped_missing} clips missing on disk (relink them first)")
 
     if to_scene_only:
         log.info(f"Queueing scene-only detection for {len(to_scene_only)} clips missing thumbnails")
+        job_progress["__scene_backfill__"] = {
+            "running": True, "done": 0, "total": len(to_scene_only), "skipped_missing": skipped_missing,
+        }
         async def _scene_only_runner():
             loop = asyncio.get_event_loop()
+            done = 0
             for idx, f in enumerate(to_scene_only, 1):
                 if _stop_requested:
                     break
@@ -778,8 +893,6 @@ async def api_batch_process(project_id: int, req: BatchRequest, background_tasks
                     "filename": f["filename"],
                 }
                 try:
-                    # Use auto-resolved path in case the folder was renamed
-                    from fcpxml import _resolve_actual_path
                     real_path = _resolve_actual_path(f["path"])
                     tx_segs = await get_transcript(fid)
                     scenes = await loop.run_in_executor(
@@ -800,6 +913,9 @@ async def api_batch_process(project_id: int, req: BatchRequest, background_tasks
                 except Exception as e:
                     log.warning(f"[{f['filename']}] retro-scene failed: {e}")
                     job_progress.pop(fid, None)
+                done += 1
+                job_progress["__scene_backfill__"]["done"] = done
+            job_progress["__scene_backfill__"]["running"] = False
             log.info("Scene-only backfill finished")
 
         background_tasks.add_task(_scene_only_runner)
@@ -811,6 +927,7 @@ async def api_batch_process(project_id: int, req: BatchRequest, background_tasks
         "file_ids": to_transcribe,
         "transcribing": len(to_transcribe),
         "scene_only": len(to_scene_only),
+        "skipped_missing": skipped_missing,
     }
 
 
@@ -851,8 +968,8 @@ async def api_stop():
 
 @app.post("/api/admin/reclassify-scenes")
 async def admin_reclassify(background_tasks: BackgroundTasks):
-    """Trigger a manual reclassification of all scenes (indoor/outdoor + tags)."""
-    background_tasks.add_task(reclassify_all_scenes)
+    """Trigger a manual reclassification of ALL non-AI scenes (indoor/outdoor + tags)."""
+    background_tasks.add_task(reclassify_all_scenes, True)  # force=True
     return {"queued": True}
 
 

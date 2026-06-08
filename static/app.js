@@ -878,22 +878,22 @@ function startPolling() {
     const anyActive = files.some(f =>
       ['queued', 'transcribing', 'analyzing', 'transcribed'].includes(jobs[f.id]?.status || f.status)
     );
-    const reclassifying = jobs['__reclassify__']?.running;
+    const bgRunning = jobs['__reclassify__']?.running || jobs['__scene_backfill__']?.running;
 
     if (anyActive) {
       wasProcessing = true;
-    } else if (wasProcessing && !reclassifying) {
+    } else if (wasProcessing && !bgRunning) {
       wasProcessing = false;
       stopPolling();
       hideNowProcessing();
       const stopBtn = document.getElementById('stop-btn');
       if (stopBtn) { stopBtn.style.display = 'none'; stopBtn.disabled = false; }
       showCompletionBanner();
-    } else if (!anyActive && !reclassifying) {
+    } else if (!anyActive && !bgRunning) {
       stopPolling();
       hideNowProcessing();
     }
-    // If only reclassifying: keep polling, updateNowProcessing already shows it
+    // If only a background job is running: keep polling, updateNowProcessing shows it
   }, 2200);
 }
 
@@ -1766,27 +1766,33 @@ function updateNowProcessing() {
     .includes(allJobs[f.id]?.status || f.status)
   );
 
-  // Background scene reclassify (runs on startup, no clip association)
+  // Background scene jobs that aren't tied to a single clip in the list:
+  //   __scene_backfill__ — making thumbnails for clips that have none
+  //   __reclassify__     — re-running the shot-type heuristic
+  const backfill   = allJobs['__scene_backfill__'];
   const reclassify = allJobs['__reclassify__'];
-  if (reclassify?.running) {
-    if (!queued.length && !current) {
-      // Show reclassify as the active task
-      document.getElementById('now-processing').style.display = 'block';
-      const pct = reclassify.total > 0 ? Math.round(reclassify.done / reclassify.total * 100) : null;
-      document.getElementById('np-stage').textContent = 'CLASSIFYING SCENES';
-      document.getElementById('np-pct').textContent = pct != null ? `${pct}%` : '';
-      document.getElementById('np-filename').textContent = `${reclassify.done} / ${reclassify.total} scenes`;
-      document.getElementById('np-detail').textContent = 'Detecting shot types, indoor/outdoor, and visual content…';
-      document.getElementById('np-count').textContent = '';
-      const bar = document.getElementById('np-bar-fill');
-      if (bar) {
-        if (pct != null) { bar.style.width = pct + '%'; bar.classList.remove('indeterminate'); }
-        else             { bar.style.width = '40%';     bar.classList.add('indeterminate'); }
-      }
-      // Keep polling so the bar updates
-      if (!pollTimer) startPolling();
-      return;
+  const bgJob = (backfill?.running ? { ...backfill, label: 'MAKING THUMBNAILS',
+                   detail: 'Detecting scene cuts and grabbing a thumbnail for each clip…', unit: 'clips' }
+               : reclassify?.running ? { ...reclassify, label: 'CLASSIFYING SCENES',
+                   detail: 'Detecting shot types, indoor/outdoor, and visual content…', unit: 'scenes' }
+               : null);
+
+  if (bgJob && !queued.length && !current) {
+    document.getElementById('now-processing').style.display = 'block';
+    const pct = bgJob.total > 0 ? Math.round(bgJob.done / bgJob.total * 100) : null;
+    document.getElementById('np-stage').textContent = bgJob.label;
+    document.getElementById('np-pct').textContent = pct != null ? `${pct}%` : '';
+    document.getElementById('np-filename').textContent = `${bgJob.done} / ${bgJob.total} ${bgJob.unit}`;
+    document.getElementById('np-detail').textContent = bgJob.detail;
+    document.getElementById('np-count').textContent =
+      bgJob.skipped_missing ? `${bgJob.skipped_missing} skipped (missing on disk — relink them)` : '';
+    const bar = document.getElementById('np-bar-fill');
+    if (bar) {
+      if (pct != null) { bar.style.width = pct + '%'; bar.classList.remove('indeterminate'); }
+      else             { bar.style.width = '40%';     bar.classList.add('indeterminate'); }
     }
+    if (!pollTimer) startPolling();
+    return;
   }
 
   if (!queued.length && !current) { hideNowProcessing(); return; }
