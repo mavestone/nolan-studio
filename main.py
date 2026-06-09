@@ -876,47 +876,74 @@ async def api_batch_process(project_id: int, req: BatchRequest, background_tasks
         log.info(f"Scene backfill: skipping {skipped_missing} clips missing on disk (relink them first)")
 
     if to_scene_only:
-        log.info(f"Queueing scene-only detection for {len(to_scene_only)} clips missing thumbnails")
+        # How many clips to detect at once. CPU cores − 1 by default (leave one
+        # free for the UI/server), clamped to 2..8, overridable in settings.json.
+        import os as _os
+        settings = _load_settings()
+        default_workers = max(2, min(8, (_os.cpu_count() or 4) - 1))
+        workers = int(settings.get("scene_concurrency") or default_workers)
+        workers = max(1, min(8, workers))
+
+        log.info(f"Queueing scene-only detection for {len(to_scene_only)} clips "
+                 f"missing thumbnails ({workers} at a time)")
         job_progress["__scene_backfill__"] = {
-            "running": True, "done": 0, "total": len(to_scene_only), "skipped_missing": skipped_missing,
+            "running": True, "done": 0, "total": len(to_scene_only),
+            "skipped_missing": skipped_missing, "workers": workers,
         }
+
         async def _scene_only_runner():
+            from concurrent.futures import ThreadPoolExecutor
             loop = asyncio.get_event_loop()
+            sem  = asyncio.Semaphore(workers)
+            # Dedicated pool so N decodes truly run in parallel (OpenCV/ffmpeg
+            # release the GIL during the heavy work, so threads give real cores).
+            pool = ThreadPoolExecutor(max_workers=workers)
             done = 0
-            for idx, f in enumerate(to_scene_only, 1):
+            total = len(to_scene_only)
+
+            async def _process_one(f):
+                nonlocal done
                 if _stop_requested:
-                    break
+                    return
                 fid = f["id"]
-                job_progress[fid] = {
-                    "status": "transcribed", "progress": 70,
-                    "stage": f"Detecting scenes ({idx}/{len(to_scene_only)})…",
-                    "filename": f["filename"],
-                }
-                try:
-                    real_path = _resolve_actual_path(f["path"])
-                    tx_segs = await get_transcript(fid)
-                    scenes = await loop.run_in_executor(
-                        None,
-                        lambda fi=fid, p=real_path, t=tx_segs: detect_scenes(fi, p, transcript_segments=t),
-                    )
-                    if scenes:
-                        await save_scenes(fid, scenes)
-                        await update_file_scene_summary(fid, scenes)
-                        first_thumb = next(
-                            (s["thumbnail_path"] for s in scenes if s.get("thumbnail_path")), None
+                async with sem:
+                    if _stop_requested:
+                        return
+                    job_progress[fid] = {
+                        "status": "transcribed", "progress": 70,
+                        "stage": "Detecting scenes…", "filename": f["filename"],
+                    }
+                    try:
+                        real_path = _resolve_actual_path(f["path"])
+                        tx_segs = await get_transcript(fid)
+                        scenes = await loop.run_in_executor(
+                            pool,
+                            lambda fi=fid, p=real_path, t=tx_segs: detect_scenes(fi, p, transcript_segments=t),
                         )
-                        if first_thumb:
-                            await save_poster_path(fid, first_thumb)
-                        log.info(f"[{f['filename']}] retro-detect: {len(scenes)} scenes")
-                    job_progress[fid] = {"status": f["status"], "progress": 100,
-                                          "stage": "Complete", "filename": f["filename"]}
-                except Exception as e:
-                    log.warning(f"[{f['filename']}] retro-scene failed: {e}")
-                    job_progress.pop(fid, None)
-                done += 1
-                job_progress["__scene_backfill__"]["done"] = done
-            job_progress["__scene_backfill__"]["running"] = False
-            log.info("Scene-only backfill finished")
+                        if scenes:
+                            await save_scenes(fid, scenes)
+                            await update_file_scene_summary(fid, scenes)
+                            first_thumb = next(
+                                (s["thumbnail_path"] for s in scenes if s.get("thumbnail_path")), None
+                            )
+                            if first_thumb:
+                                await save_poster_path(fid, first_thumb)
+                            log.info(f"[{f['filename']}] retro-detect: {len(scenes)} scenes")
+                        job_progress[fid] = {"status": f["status"], "progress": 100,
+                                              "stage": "Complete", "filename": f["filename"]}
+                    except Exception as e:
+                        log.warning(f"[{f['filename']}] retro-scene failed: {e}")
+                        job_progress.pop(fid, None)
+                    finally:
+                        done += 1
+                        job_progress["__scene_backfill__"]["done"] = done
+
+            try:
+                await asyncio.gather(*[_process_one(f) for f in to_scene_only])
+            finally:
+                pool.shutdown(wait=False)
+                job_progress["__scene_backfill__"]["running"] = False
+                log.info(f"Scene-only backfill finished ({done}/{total})")
 
         background_tasks.add_task(_scene_only_runner)
 

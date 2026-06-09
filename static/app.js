@@ -1790,7 +1790,7 @@ function updateNowProcessing() {
   const backfill   = allJobs['__scene_backfill__'];
   const reclassify = allJobs['__reclassify__'];
   const bgJob = (backfill?.running ? { ...backfill, label: 'MAKING THUMBNAILS',
-                   detail: 'Detecting scene cuts and grabbing a thumbnail for each clip…', unit: 'clips' }
+                   detail: `Detecting scene cuts — ${backfill.workers || 1} clips at a time…`, unit: 'clips' }
                : reclassify?.running ? { ...reclassify, label: 'CLASSIFYING SCENES',
                    detail: 'Detecting shot types, indoor/outdoor, and visual content…', unit: 'scenes' }
                : null);

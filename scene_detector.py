@@ -333,6 +333,9 @@ def detect_scenes(
 
         video   = open_video(path)
         manager = SceneManager()
+        # auto_downscale (on by default) shrinks frames for the cut-detection
+        # math. The expensive part is decoding the source frames, which we
+        # can't avoid without losing accuracy on multi-cut clips.
         manager.add_detector(AdaptiveDetector(adaptive_threshold=threshold))
         manager.detect_scenes(video, show_progress=False)
         scene_list = manager.get_scene_list()
