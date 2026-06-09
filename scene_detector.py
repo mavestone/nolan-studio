@@ -171,8 +171,13 @@ def _classify_shot_opencv(thumbnail_path: str) -> dict:
         else:
             setting = "indoor"
 
-        tags.append(setting)
-        if setting == "outdoor" and v_mean > 110 and sky_pct > 0.05:
+        # NOTE: indoor/outdoor (`setting`) is intentionally NOT set here.
+        # The OpenCV colour heuristic is too unreliable for it — instead we
+        # leave `setting` null and let the AI vision pass decide, which is far
+        # more accurate. We still keep the descriptive colour tags below.
+        if v_mean < 50:
+            tags.append("night")
+        if v_mean > 110 and sky_pct > 0.05:
             tags.append("day")
         if sand_pct > 0.18:
             tags.append("desert")
@@ -183,7 +188,7 @@ def _classify_shot_opencv(thumbnail_path: str) -> dict:
             "shot_type":    shot_type,
             "shot_size":    shot_size,
             "shot_angle":   shot_angle,
-            "setting":      setting,
+            "setting":      None,          # ← AI decides indoor/outdoor
             "tags":         tags,
             "location":     None,
             "description":  None,
@@ -196,12 +201,12 @@ def _classify_shot_opencv(thumbnail_path: str) -> dict:
 
 
 def _empty_classification() -> dict:
-    """Sensible defaults so every scene always has shot_size, shot_angle, setting set."""
+    """Sensible defaults so every scene always has shot_size, shot_angle set."""
     return {
         "shot_type":  "broll",
         "shot_size":  "wide",        # never null
         "shot_angle": "eye_level",   # never null
-        "setting":    "outdoor",     # never null — most common default
+        "setting":    None,          # AI decides indoor/outdoor
         "tags": [], "location": None,
         "description": None, "ai_classified": False,
     }
@@ -406,8 +411,8 @@ def detect_scenes_sampled(
                 log.debug(f"[detect_scenes_sampled] thumb {i} failed: {te}")
                 thumb_rel = None
 
-            has_dialogue = _scene_has_dialogue(start_s, end_s, transcript_segments)
-            roll_type    = "a_roll" if has_dialogue else "b_roll"
+            roll_type    = _dialogue_level(start_s, end_s, transcript_segments)
+            has_dialogue = roll_type != "no_dialogue"
 
             cls = _classify_shot_opencv(str(thumb_abs)) if thumb_ok else _empty_classification()
 
@@ -505,9 +510,9 @@ def detect_scenes(
                 log.debug(f"[scene_detector] thumb {i} failed: {te}")
                 thumb_rel = None
 
-            # A-roll vs B-roll from transcript overlap
-            has_dialogue = _scene_has_dialogue(start_s, end_s, transcript_segments)
-            roll_type    = "a_roll" if has_dialogue else "b_roll"
+            # Dialogue tier from transcript overlap
+            roll_type    = _dialogue_level(start_s, end_s, transcript_segments)
+            has_dialogue = roll_type != "no_dialogue"
 
             # Always start with OpenCV
             cls = _classify_shot_opencv(str(thumb_abs)) if thumb_ok else _empty_classification()
@@ -550,6 +555,31 @@ def _scene_has_dialogue(start_s: float, end_s: float, segments: list[dict]) -> b
             if len(text) > 2:  # ignore single-character noise
                 return True
     return False
+
+
+# Dialogue tiers (stored in scenes.roll_type for backward compatibility):
+#   no_dialogue    — silence / pure visual
+#   dialogue       — some speech
+#   heavy_dialogue — dense, continuous speech (interview / sit-down)
+HEAVY_WPS = 2.0   # words-per-second threshold for "heavy" (normal speech ~2.5)
+
+def _dialogue_level(start_s: float, end_s: float, segments: list[dict]) -> str:
+    """
+    Classify how much speech is in this window by word density.
+    Returns 'no_dialogue' | 'dialogue' | 'heavy_dialogue'.
+    """
+    words = 0
+    for seg in segments:
+        seg_start = seg.get("start_time") or seg.get("start") or 0
+        seg_end   = seg.get("end_time")   or seg.get("end")   or seg_start
+        if seg_end >= start_s and seg_start <= end_s:
+            text = (seg.get("text") or "").strip()
+            if text:
+                words += len(text.split())
+    if words == 0:
+        return "no_dialogue"
+    span = max(1.0, end_s - start_s)
+    return "heavy_dialogue" if (words / span) >= HEAVY_WPS else "dialogue"
 
 
 def classify_shot(thumbnail_path: str) -> dict:

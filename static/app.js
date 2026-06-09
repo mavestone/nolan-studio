@@ -528,6 +528,7 @@ function showHome() {
   document.getElementById('view-home').style.display = 'flex';
   document.getElementById('view-project').style.display = 'none';
   stopPolling();
+  hideConsoleTab();
   currentProjectId = null;
   activeFileId = null;
   loadProjectGrid();
@@ -655,6 +656,7 @@ async function showProject(id, name) {
   document.querySelectorAll('.pool-tab').forEach(t => t.classList.toggle('active', t.dataset.filter === 'all'));
 
   setWorkspace('clips', false);
+  showConsoleTab();   // collapsed header peeks at the bottom; opens on Process
   await Promise.all([loadBins(), loadClips()]);
   startPolling();
 }
@@ -799,19 +801,129 @@ async function processAll() {
   const stopBtn = document.getElementById('stop-btn');
   btn.disabled  = true;
   btn.innerHTML = '<svg width="11" height="11" viewBox="0 0 11 11" fill="none" style="margin-right:4px"><rect x="1" y="1" width="9" height="9" rx="1.5" stroke="currentColor" stroke-width="1.4"/><path d="M3.5 3.5l4 4M7.5 3.5l-4 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>Queuing…';
+
+  // Open the activity console so the user can see what's happening
+  openConsole();
+  startConsolePolling();
+
   try {
     const res = await apiFetch(`/api/projects/${currentProjectId}/process`, 'POST', { model_size: model });
-    if (res.queued > 0) stopBtn.style.display = 'inline-flex';
+    const totalQueued = (res.queued || 0);
+    if (totalQueued > 0) {
+      stopBtn.style.display = 'inline-flex';
+      consoleNote(`Queued ${res.transcribing || 0} transcriptions + ${res.scene_only || 0} scene jobs`
+        + (res.skipped_missing ? ` · ${res.skipped_missing} skipped (missing on disk)` : ''));
+    } else {
+      // Nothing to do — tell the user clearly instead of silently doing nothing
+      const msg = res.skipped_missing
+        ? `Nothing to process — ${res.skipped_missing} clips are missing on disk (relink them first).`
+        : `Everything's already processed — nothing to do.`;
+      consoleNote('✓ ' + msg);
+      showToast(msg, 4000);
+    }
     startPolling();
     setTimeout(() => {
       btn.disabled = false;
       btn.innerHTML = '<svg width="11" height="11" viewBox="0 0 11 11" fill="none" style="margin-right:4px"><polygon points="2,1 10,5.5 2,10" fill="currentColor"/></svg>Process';
     }, 2500);
   } catch (e) {
-    alert('Failed: ' + e.message);
+    consoleNote('⚠️ Failed: ' + e.message, 'err');
+    showToast('Failed: ' + e.message, 4000);
     btn.disabled = false;
     btn.innerHTML = '<svg width="11" height="11" viewBox="0 0 11 11" fill="none" style="margin-right:4px"><polygon points="2,1 10,5.5 2,10" fill="currentColor"/></svg>Process';
   }
+}
+
+// ════════════════════ ACTIVITY CONSOLE ════════════════════
+let consoleSeq      = 0;
+let consolePollTimer = null;
+let consoleOpen      = false;
+
+function openConsole() {
+  const d = document.getElementById('console-drawer');
+  if (!d) return;
+  d.classList.remove('hidden');
+  d.classList.add('open');
+  consoleOpen = true;
+  document.getElementById('console-toggle-btn').textContent = '▾';
+  startConsolePolling();
+}
+function closeConsole() {
+  const d = document.getElementById('console-drawer');
+  if (!d) return;
+  d.classList.remove('open');   // collapses to peeking header
+  consoleOpen = false;
+  document.getElementById('console-toggle-btn').textContent = '▴';
+}
+// Show the collapsed console header in project view; fully hide on home
+function showConsoleTab()  { document.getElementById('console-drawer')?.classList.remove('hidden'); }
+function hideConsoleTab()  {
+  const d = document.getElementById('console-drawer');
+  if (d) { d.classList.remove('open'); d.classList.add('hidden'); }
+  consoleOpen = false;
+  stopConsolePolling();
+}
+function toggleConsole(e) {
+  if (e) e.stopPropagation();
+  consoleOpen ? closeConsole() : openConsole();
+}
+function clearConsole(e) {
+  if (e) e.stopPropagation();
+  consoleSeq = 0;
+  const body = document.getElementById('console-body');
+  if (body) body.innerHTML = '<div class="console-empty">Cleared. Waiting for activity…</div>';
+}
+
+function consoleNote(text, level) {
+  // Inject a client-side line (not from the server log)
+  const body = document.getElementById('console-body');
+  if (!body) return;
+  const empty = body.querySelector('.console-empty');
+  if (empty) empty.remove();
+  const now = new Date().toTimeString().slice(0, 8);
+  const div = document.createElement('div');
+  div.className = 'console-line' + (level === 'err' ? ' err' : level === 'warn' ? ' warn' : '');
+  div.innerHTML = `<span class="ct">${now}</span>${escHtml(text)}`;
+  body.appendChild(div);
+  body.scrollTop = body.scrollHeight;
+}
+
+async function pollConsole() {
+  try {
+    const res = await apiFetch(`/api/activity?since=${consoleSeq}`);
+    const body = document.getElementById('console-body');
+    if (!body) return;
+    if (res.lines && res.lines.length) {
+      const empty = body.querySelector('.console-empty');
+      if (empty) empty.remove();
+      const nearBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 60;
+      for (const ln of res.lines) {
+        const div = document.createElement('div');
+        const lvl = ln.level === 'WARNING' ? ' warn' : (ln.level === 'ERROR' || ln.level === 'CRITICAL') ? ' err' : '';
+        div.className = 'console-line' + lvl;
+        div.innerHTML = `<span class="ct">${ln.t}</span>${escHtml(ln.msg)}`;
+        body.appendChild(div);
+      }
+      // Cap DOM size
+      while (body.children.length > 600) body.removeChild(body.firstChild);
+      if (nearBottom) body.scrollTop = body.scrollHeight;
+    }
+    consoleSeq = res.last_seq || consoleSeq;
+  } catch (_) {}
+}
+
+function startConsolePolling() {
+  if (consolePollTimer) return;
+  const body = document.getElementById('console-body');
+  if (body && !body.children.length) {
+    body.innerHTML = '<div class="console-empty">Waiting for activity…</div>';
+  }
+  pollConsole();
+  consolePollTimer = setInterval(pollConsole, 1000);
+}
+function stopConsolePolling() {
+  if (consolePollTimer) { clearInterval(consolePollTimer); consolePollTimer = null; }
+  document.getElementById('console-dot')?.classList.remove('live');
 }
 
 async function stopProcessing() {
@@ -924,8 +1036,20 @@ const SHOT_TYPE_ORDER = { closeup: 0, medium: 1, wide: 2, broll: 3, unknown: 4 }
 const SHOT_SIZE_ORDER = {
   extreme_close_up: 0, close_up: 1, medium: 2, full: 3, wide: 4, extreme_wide: 5, aerial: 6,
 };
-const ROLL_ORDER    = { a_roll: 0, b_roll: 1 };
+const ROLL_ORDER    = { no_dialogue: 0, dialogue: 1, heavy_dialogue: 2, b_roll: 0, a_roll: 1 };
 const SETTING_ORDER = { indoor: 0, outdoor: 1 };
+
+// Dialogue tiers — handle both new values and legacy a_roll/b_roll
+function dialogueLabel(v) {
+  return ({
+    no_dialogue: 'NO DIALOGUE', dialogue: 'DIALOGUE', heavy_dialogue: 'HEAVY DIALOGUE',
+    b_roll: 'NO DIALOGUE', a_roll: 'DIALOGUE',
+  })[v] || '';
+}
+function dialogueClass(v) {
+  const norm = ({ b_roll: 'no_dialogue', a_roll: 'dialogue' })[v] || v;
+  return 'roll-' + norm;
+}
 
 function setFilter(filter) {
   activeFilter = filter;
@@ -1088,8 +1212,11 @@ function renderClipGrid(files = allFiles, jobs = allJobs) {
       full:             'FULL',
       wide:             'WIDE',
       extreme_wide:     'EXTREME WIDE',
-      a_roll:           'A-ROLL · KEY DIALOGUE',
-      b_roll:           'B-ROLL · NO DIALOGUE',
+      no_dialogue:      'NO DIALOGUE',
+      dialogue:         'DIALOGUE',
+      heavy_dialogue:   'HEAVY DIALOGUE',
+      a_roll:           'DIALOGUE',
+      b_roll:           'NO DIALOGUE',
       indoor:           'INDOOR',
       outdoor:          'OUTDOOR',
       closeup:          'CLOSE-UP',
@@ -1149,7 +1276,7 @@ function clipRowHtml(f, liveStatus) {
 
   // Compact attribute chips (text-based, no icons)
   const rollChip = f.primary_roll_type
-    ? `<span class="clip-row-attr roll-${escHtml(f.primary_roll_type)}">${f.primary_roll_type === 'a_roll' ? 'A-ROLL' : 'B-ROLL'}</span>`
+    ? `<span class="clip-row-attr ${dialogueClass(f.primary_roll_type)}">${dialogueLabel(f.primary_roll_type)}</span>`
     : '';
   const sizeChip = f.primary_shot_size
     ? `<span class="clip-row-attr size-${escHtml(f.primary_shot_size)}">${escHtml(SHOT_SIZE_LABEL[f.primary_shot_size] || f.primary_shot_size.toUpperCase())}</span>`
@@ -1187,9 +1314,9 @@ function clipCardHtml(f, liveStatus) {
     ? `<span class="clip-card-shot" data-shot="${escHtml(f.primary_shot_size || f.primary_shot_type)}">${escHtml(SHOT_SIZE_LABEL[sizeOrType] || sizeOrType.toUpperCase().replace('CLOSEUP','CLOSE-UP'))}</span>`
     : '';
 
-  // Roll badge — top-left next to status dot, text-based
+  // Dialogue badge — top-left next to status dot, text-based
   const rollBadge = f.primary_roll_type
-    ? `<span class="clip-card-rollbadge roll-${escHtml(f.primary_roll_type)}">${f.primary_roll_type === 'a_roll' ? 'A-ROLL' : 'B-ROLL'}</span>`
+    ? `<span class="clip-card-rollbadge ${dialogueClass(f.primary_roll_type)}">${dialogueLabel(f.primary_roll_type)}</span>`
     : '';
 
   const dur = f.duration_seconds
@@ -1504,7 +1631,12 @@ const SHOT_ANGLE_LABEL = {
 function matchesSceneFilter(scene, filter) {
   if (filter === 'all') return true;
   if (filter.startsWith('size:'))   return scene.shot_size  === filter.slice(5);
-  if (filter.startsWith('roll:'))   return scene.roll_type  === filter.slice(5);
+  if (filter.startsWith('roll:')) {
+    const want = filter.slice(5);
+    // normalize legacy a_roll/b_roll to the new tiers
+    const norm = ({ b_roll: 'no_dialogue', a_roll: 'dialogue' })[scene.roll_type] || scene.roll_type;
+    return norm === want;
+  }
   if (filter.startsWith('set:'))    return scene.setting    === filter.slice(4);
   // Legacy support
   return scene.shot_type === filter;
@@ -1555,9 +1687,9 @@ function sceneCardHtml(s, filenameOverride) {
     ? `<div class="scene-card-size size-${escHtml(s.shot_size)}">${escHtml(SHOT_SIZE_LABEL[s.shot_size] || s.shot_size)}</div>`
     : `<div class="scene-badge badge-${escHtml(s.shot_type || 'unknown')}">${escHtml((s.shot_type || '').toUpperCase().replace('CLOSEUP','CLOSE-UP') || '?')}</div>`;
 
-  // Roll-type badge (top-right)
+  // Dialogue-tier badge (top-right)
   const rollBadge = s.roll_type
-    ? `<div class="scene-card-roll roll-${escHtml(s.roll_type)}">${s.roll_type === 'a_roll' ? 'A-ROLL' : 'B-ROLL'}</div>`
+    ? `<div class="scene-card-roll ${dialogueClass(s.roll_type)}">${dialogueLabel(s.roll_type)}</div>`
     : '';
 
   // Angle indicator (bottom-right)

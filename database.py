@@ -828,9 +828,18 @@ async def update_file_scene_summary(file_id: int, scenes: list[dict]) -> None:
     sizes = [s.get("shot_size") for s in scenes if s.get("shot_size")]
     primary_size = min(sizes, key=lambda s: SIZE_RANK.get(s, 9)) if sizes else None
 
-    # Roll type — a_roll if ANY scene has dialogue
-    rolls = [s.get("roll_type") for s in scenes if s.get("roll_type")]
-    primary_roll = "a_roll" if "a_roll" in rolls else ("b_roll" if rolls else None)
+    # Dialogue tier — surface the HIGHEST level present across the clip's scenes
+    # (heavy > dialogue > none). Legacy a_roll/b_roll are normalized.
+    _norm = {"a_roll": "dialogue", "b_roll": "no_dialogue"}
+    rolls = [_norm.get(s.get("roll_type"), s.get("roll_type")) for s in scenes if s.get("roll_type")]
+    if "heavy_dialogue" in rolls:
+        primary_roll = "heavy_dialogue"
+    elif "dialogue" in rolls:
+        primary_roll = "dialogue"
+    elif "no_dialogue" in rolls:
+        primary_roll = "no_dialogue"
+    else:
+        primary_roll = None
 
     # Setting — majority vote, ties favour outdoor
     settings = Counter(s.get("setting") for s in scenes if s.get("setting"))

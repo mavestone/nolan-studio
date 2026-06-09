@@ -19,6 +19,32 @@ logging.basicConfig(
 )
 log = logging.getLogger("nolan")
 
+# ── Live activity log (for the in-app "console" panel) ───────────────────────
+import collections as _collections
+import time as _time
+_activity_buf: "_collections.deque" = _collections.deque(maxlen=600)
+_activity_seq = 0
+
+class _ActivityHandler(logging.Handler):
+    """Captures nolan log records into a ring buffer the UI can poll."""
+    def emit(self, record):
+        global _activity_seq
+        try:
+            msg = record.getMessage()
+            _activity_seq += 1
+            _activity_buf.append({
+                "seq":   _activity_seq,
+                "t":     _time.strftime("%H:%M:%S"),
+                "level": record.levelname,
+                "msg":   msg,
+            })
+        except Exception:
+            pass
+
+_activity_handler = _ActivityHandler()
+_activity_handler.setLevel(logging.INFO)
+log.addHandler(_activity_handler)
+
 from fastapi import FastAPI, BackgroundTasks, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -424,10 +450,60 @@ async def _startup_maintenance():
         await cleanup_db_hidden_and_dupes()
         await migrate_error_clips_to_silent()
         await backfill_missing_posters()
+        await migrate_dialogue_tiers()      # a_roll/b_roll → no/dialogue/heavy
         await backfill_scene_classifications()
-        await reclassify_all_scenes()   # guarded: only unclassified scenes
+        await reclassify_all_scenes()       # guarded: only unclassified scenes
     except Exception as e:
         log.warning(f"Startup maintenance error: {e}")
+
+
+async def migrate_dialogue_tiers():
+    """
+    Recompute scenes.roll_type into the 3-tier dialogue system
+    (no_dialogue / dialogue / heavy_dialogue) from each clip's transcript.
+    Cheap — no video decode, just word-counting per scene window. Guarded:
+    only runs while legacy a_roll/b_roll values remain.
+    """
+    import aiosqlite
+    from database import DB_PATH
+    from scene_detector import _dialogue_level
+
+    async with aiosqlite.connect(DB_PATH, timeout=10) as db:
+        db.row_factory = aiosqlite.Row
+        # Which files still have legacy-tagged scenes?
+        async with db.execute(
+            "SELECT DISTINCT file_id FROM scenes WHERE roll_type IN ('a_roll','b_roll')"
+        ) as cur:
+            file_ids = [r[0] for r in await cur.fetchall()]
+
+        if not file_ids:
+            return
+
+        log.info(f"Dialogue tiers: migrating {len(file_ids)} clips to 3-tier system…")
+        updated = 0
+        for fid in file_ids:
+            async with db.execute(
+                "SELECT start_time, end_time, text FROM segments WHERE file_id = ? ORDER BY start_time",
+                (fid,),
+            ) as c:
+                segs = [{"start_time": r[0], "end_time": r[1], "text": r[2]} for r in await c.fetchall()]
+            async with db.execute(
+                "SELECT id, start_time, end_time FROM scenes WHERE file_id = ?", (fid,)
+            ) as c:
+                scs = await c.fetchall()
+            for s in scs:
+                level = _dialogue_level(s["start_time"], s["end_time"], segs)
+                await db.execute("UPDATE scenes SET roll_type = ? WHERE id = ?", (level, s["id"]))
+                updated += 1
+        await db.commit()
+
+        # Refresh per-file primary_roll_type from the new scene values
+        from database import get_scenes, update_file_scene_summary
+        for fid in file_ids:
+            scs = await get_scenes(fid)
+            if scs:
+                await update_file_scene_summary(fid, scs)
+    log.info(f"Dialogue tiers: updated {updated} scenes across {len(file_ids)} clips")
 
 
 @asynccontextmanager
@@ -1696,6 +1772,14 @@ async def search(q: str, project_id: int | None = None):
 @app.get("/api/jobs")
 async def all_jobs():
     return job_progress
+
+
+@app.get("/api/activity")
+async def activity(since: int = 0):
+    """Return activity-log lines newer than `since` (for the in-app console)."""
+    lines = [e for e in _activity_buf if e["seq"] > since]
+    last = _activity_buf[-1]["seq"] if _activity_buf else since
+    return {"lines": lines, "last_seq": last}
 
 
 @app.get("/api/files/{file_id}/scenes")
