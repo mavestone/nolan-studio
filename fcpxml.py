@@ -113,8 +113,12 @@ def _esc(s: str) -> str:
 
 def _get_tc_info(path: str):
     """Read embedded SMPTE timecode, framerate, audio/video specs."""
+    import shutil, os as _os
+    _ffprobe = shutil.which("ffprobe") or next(
+        (c for c in ("/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe") if _os.path.exists(c)),
+        "ffprobe")
     cmd = [
-        "ffprobe", "-v", "quiet",
+        _ffprobe, "-v", "quiet",
         "-print_format", "json",
         "-show_streams",
         path

@@ -25,7 +25,9 @@ Schema returned per scene:
 
 import json
 import logging
+import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -34,6 +36,23 @@ log = logging.getLogger("nolan")
 THUMBNAILS_DIR = Path("static/thumbnails")
 THUMB_WIDTH    = 320
 POSTER_WIDTH   = 400
+
+
+# Resolve ffmpeg/ffprobe to absolute paths. .app launches have a minimal PATH
+# that excludes Homebrew, so bare "ffmpeg"/"ffprobe" can't be found — which
+# silently breaks duration probing (→ 0.0) and thumbnail extraction.
+def _resolve_bin(name: str) -> str:
+    p = shutil.which(name)
+    if p:
+        return p
+    for d in ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"):
+        cand = os.path.join(d, name)
+        if os.path.exists(cand):
+            return cand
+    return name  # last resort: hope it's on PATH
+
+_FFMPEG  = _resolve_bin("ffmpeg")
+_FFPROBE = _resolve_bin("ffprobe")
 
 
 # ── OpenCV heuristic classifier ───────────────────────────────────────────────
@@ -319,13 +338,13 @@ def _probe_duration(path: str) -> float:
     """Return clip duration in seconds via ffprobe (0.0 on failure)."""
     try:
         out = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+            [_FFPROBE, "-v", "error", "-show_entries", "format=duration",
              "-of", "default=noprint_wrappers=1:nokey=1", path],
             capture_output=True, text=True, timeout=30,
         ).stdout.strip()
         return float(out)
     except Exception as e:
-        log.debug(f"[_probe_duration] {e}")
+        log.warning(f"[_probe_duration] ffprobe failed ({_FFPROBE}): {e}")
         return 0.0
 
 
@@ -604,7 +623,7 @@ def _extract_thumbnail(video_path: str, timestamp: float,
                        output_path: str, width: int = THUMB_WIDTH) -> None:
     ts = max(0.0, timestamp)
     cmd = [
-        "ffmpeg", "-y",
+        _FFMPEG, "-y",
         "-ss", f"{ts:.3f}",
         "-i", video_path,
         "-vframes", "1",

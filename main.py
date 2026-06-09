@@ -12,6 +12,14 @@ from dotenv import load_dotenv
 # override=True so .env wins over stale/empty shell variables
 load_dotenv(override=True)
 
+# .app launches inherit a minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin) that
+# excludes Homebrew, so bare `ffmpeg`/`ffprobe` subprocess calls fail silently
+# (ffprobe → duration 0.0, ffmpeg → no thumbnails). Prepend the usual Homebrew
+# + framework bin dirs so every subprocess tool resolves regardless of launcher.
+for _p in ("/opt/homebrew/bin", "/usr/local/bin"):
+    if os.path.isdir(_p) and _p not in os.environ.get("PATH", "").split(os.pathsep):
+        os.environ["PATH"] = _p + os.pathsep + os.environ.get("PATH", "")
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(message)s",
