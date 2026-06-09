@@ -308,6 +308,105 @@ def _shot_type_from_size(shot_size: str | None, has_dialogue: bool) -> str:
     return "broll" if not has_dialogue else "medium"
 
 
+# ── Duration probe ─────────────────────────────────────────────────────────────
+
+def _probe_duration(path: str) -> float:
+    """Return clip duration in seconds via ffprobe (0.0 on failure)."""
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", path],
+            capture_output=True, text=True, timeout=30,
+        ).stdout.strip()
+        return float(out)
+    except Exception as e:
+        log.debug(f"[_probe_duration] {e}")
+        return 0.0
+
+
+# ── FAST sampled detection (for RAW footage — no internal cuts) ──────────────────
+
+def detect_scenes_sampled(
+    file_id: int,
+    path: str,
+    transcript_segments: list[dict] | None = None,
+    use_ai: bool = False,
+    interval_seconds: float = 10.0,
+    max_samples: int = 12,
+) -> list[dict]:
+    """
+    Sample a clip at fixed TIME intervals instead of decoding every frame to
+    find cuts. This is the right model for RAW camera footage, where each file
+    is one continuous take with no internal cuts — so there's nothing to detect.
+
+    Instead of a ~35s full-frame decode, we seek directly to a handful of
+    timestamps (~0.8s each via keyframe seek) and grab + classify a thumbnail
+    at each. A 44s clip → ~5 samples → ~4s. Roughly 8–10× faster.
+
+    Each sample becomes a "scene" spanning its interval, so the rest of the app
+    (thumbnails, classification, A/B-roll, AI tags) works unchanged.
+    """
+    try:
+        thumb_dir = THUMBNAILS_DIR / str(file_id)
+        thumb_dir.mkdir(parents=True, exist_ok=True)
+
+        dur = _probe_duration(path)
+        transcript_segments = transcript_segments or []
+
+        # Decide how many evenly-spaced samples to take
+        if dur <= 0:
+            boundaries = [(0.0, 0.0)]            # unknown duration → 1 sample at start
+        else:
+            import math
+            n = max(1, min(max_samples, math.ceil(dur / max(1.0, interval_seconds))))
+            seg = dur / n
+            boundaries = [(i * seg, (i + 1) * seg) for i in range(n)]
+
+        scenes = []
+        for i, (start_s, end_s) in enumerate(boundaries):
+            mid_s     = (start_s + end_s) / 2 if end_s > start_s else 1.0
+            thumb_rel = f"thumbnails/{file_id}/{i:04d}.jpg"
+            thumb_abs = Path("static") / thumb_rel
+
+            thumb_ok = False
+            try:
+                _extract_thumbnail(path, mid_s, str(thumb_abs))
+                thumb_ok = True
+            except Exception as te:
+                log.debug(f"[detect_scenes_sampled] thumb {i} failed: {te}")
+                thumb_rel = None
+
+            has_dialogue = _scene_has_dialogue(start_s, end_s, transcript_segments)
+            roll_type    = "a_roll" if has_dialogue else "b_roll"
+
+            cls = _classify_shot_opencv(str(thumb_abs)) if thumb_ok else _empty_classification()
+
+            if use_ai and thumb_ok:
+                ai = classify_shot_with_claude(str(thumb_abs), has_dialogue)
+                if ai:
+                    for k in ("shot_size", "shot_angle", "setting", "location", "description", "visual_content"):
+                        if ai.get(k):
+                            cls[k] = ai[k]
+                    cls["shot_type"]     = ai.get("shot_type") or cls.get("shot_type")
+                    cls["ai_classified"] = True
+
+            scenes.append({
+                "scene_num":      i,
+                "start_time":     round(start_s, 3),
+                "end_time":       round(end_s,   3),
+                "thumbnail_path": thumb_rel,
+                "roll_type":      roll_type,
+                **cls,
+            })
+
+        log.info(f"[file {file_id}] {len(scenes)} samples ({round(dur,1)}s clip, ai={use_ai})")
+        return scenes
+
+    except Exception as e:
+        log.warning(f"[file {file_id}] Sampled scene detection error: {e}")
+        return []
+
+
 # ── Scene detection driver ────────────────────────────────────────────────────
 
 def detect_scenes(
@@ -316,14 +415,25 @@ def detect_scenes(
     threshold: float = 2.0,
     transcript_segments: list[dict] | None = None,
     use_ai: bool = False,
+    sample_interval: float | None = None,
+    max_samples: int = 12,
 ) -> list[dict]:
     """
-    Detect scene cuts + classify each one.
+    Detect scenes + classify each one.
+
+    sample_interval: if set (> 0), use FAST time-interval sampling (right for
+        RAW footage — see detect_scenes_sampled). If None, fall back to
+        full-frame cut detection with PySceneDetect (for edited clips).
 
     transcript_segments: list of {start, end, text} — used to set roll_type
                          (a_roll if speech overlaps the scene, else b_roll)
     use_ai: if True, also run Claude vision per scene (only if claude_available)
     """
+    if sample_interval and sample_interval > 0:
+        return detect_scenes_sampled(
+            file_id, path, transcript_segments=transcript_segments,
+            use_ai=use_ai, interval_seconds=sample_interval, max_samples=max_samples,
+        )
     try:
         from scenedetect import open_video, SceneManager
         from scenedetect.detectors import AdaptiveDetector

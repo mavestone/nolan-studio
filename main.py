@@ -573,12 +573,15 @@ async def run_transcription(file_id: int, path: str, filename: str, model_size: 
         already = await has_scenes(file_id)
         if not already:
             try:
-                job_progress[file_id]["stage"] = "Detecting scene cuts…"
+                job_progress[file_id]["stage"] = "Sampling scenes…"
                 job_progress[file_id]["progress"] = 70
                 tx_segs = await get_transcript(file_id)
+                _interval, _maxs = _scene_detect_params()
                 scenes = await loop.run_in_executor(
                     None,
-                    lambda fid=file_id, p=path, t=tx_segs: detect_scenes(fid, p, transcript_segments=t),
+                    lambda fid=file_id, p=path, t=tx_segs: detect_scenes(
+                        fid, p, transcript_segments=t,
+                        sample_interval=_interval, max_samples=_maxs),
                 )
                 if scenes:
                     job_progress[file_id]["stage"] = f"Classifying {len(scenes)} scenes…"
@@ -883,6 +886,7 @@ async def api_batch_process(project_id: int, req: BatchRequest, background_tasks
         default_workers = max(2, min(8, (_os.cpu_count() or 4) - 1))
         workers = int(settings.get("scene_concurrency") or default_workers)
         workers = max(1, min(8, workers))
+        _interval, _maxs = _scene_detect_params()
 
         log.info(f"Queueing scene-only detection for {len(to_scene_only)} clips "
                  f"missing thumbnails ({workers} at a time)")
@@ -918,7 +922,9 @@ async def api_batch_process(project_id: int, req: BatchRequest, background_tasks
                         tx_segs = await get_transcript(fid)
                         scenes = await loop.run_in_executor(
                             pool,
-                            lambda fi=fid, p=real_path, t=tx_segs: detect_scenes(fi, p, transcript_segments=t),
+                            lambda fi=fid, p=real_path, t=tx_segs: detect_scenes(
+                                fi, p, transcript_segments=t,
+                                sample_interval=_interval, max_samples=_maxs),
                         )
                         if scenes:
                             await save_scenes(fid, scenes)
@@ -1731,9 +1737,11 @@ async def detect_file_scenes(
         loop = asyncio.get_event_loop()
         try:
             tx_segs = await get_transcript(file_id)
+            _interval, _maxs = _scene_detect_params()
             scenes = await loop.run_in_executor(
                 None,
-                lambda: detect_scenes(file_id, f["path"], transcript_segments=tx_segs, use_ai=use_ai),
+                lambda: detect_scenes(file_id, f["path"], transcript_segments=tx_segs,
+                                      use_ai=use_ai, sample_interval=_interval, max_samples=_maxs),
             )
             if scenes:
                 await save_scenes(file_id, scenes)
@@ -1881,6 +1889,22 @@ def _load_settings() -> dict:
         return _json.loads(_SETTINGS_PATH.read_text())
     except Exception:
         return {"offline_mode": False}
+
+def _scene_detect_params() -> tuple[float | None, int]:
+    """
+    Returns (sample_interval, max_samples) for scene detection.
+
+    Default mode is FAST time-interval sampling — right for RAW footage (every
+    clip is one continuous take, so there are no cuts to detect). Set
+    'scene_detect_mode': 'cuts' in settings.json to use full-frame cut detection
+    for edited clips instead.
+    """
+    s = _load_settings()
+    if s.get("scene_detect_mode") == "cuts":
+        return None, 12
+    interval = float(s.get("scene_sample_seconds") or 10.0)
+    max_samples = int(s.get("scene_max_samples") or 12)
+    return interval, max_samples
 
 def _save_settings(data: dict):
     _SETTINGS_PATH.write_text(_json.dumps(data, indent=2))
