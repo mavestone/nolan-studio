@@ -797,6 +797,31 @@ async def has_scenes(file_id: int) -> bool:
         return count > 0
 
 
+async def has_scene_thumbnails(file_id: int) -> bool:
+    """
+    True if this clip has at least one scene WITH a thumbnail. A clip can have
+    scene rows whose thumbnail_path is NULL (extraction failed, e.g. drive was
+    unplugged) — those need re-detection, so has_scenes() isn't enough.
+    """
+    async with _db() as db:
+        async with db.execute(
+            "SELECT 1 FROM scenes WHERE file_id = ? AND thumbnail_path IS NOT NULL LIMIT 1",
+            (file_id,),
+        ) as cur:
+            return await cur.fetchone() is not None
+
+
+async def has_scene_ai(file_id: int) -> bool:
+    """True if this clip has at least one scene with AI visual_content."""
+    async with _db() as db:
+        async with db.execute(
+            "SELECT 1 FROM scenes WHERE file_id = ? AND visual_content IS NOT NULL "
+            "AND visual_content != '' LIMIT 1",
+            (file_id,),
+        ) as cur:
+            return await cur.fetchone() is not None
+
+
 async def save_poster_path(file_id: int, poster_path: str) -> None:
     """Save the poster thumbnail path for a clip."""
     async with _db() as db:

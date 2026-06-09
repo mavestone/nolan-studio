@@ -62,7 +62,8 @@ from database import (
     save_chat_message, get_chat_messages, get_pinned_chat_messages,
     set_chat_message_pinned, clear_chat_messages, get_all_batch_summaries,
     check_analysis_stale, get_theme_relevant_clips,
-    save_scenes, get_scenes, has_scenes, save_poster_path, get_project_poster_paths,
+    save_scenes, get_scenes, has_scenes, has_scene_thumbnails, has_scene_ai,
+    save_poster_path, get_project_poster_paths,
     search_project_scenes, update_file_scene_summary, update_scene_classification,
 )
 from transcriber import scan_folder, transcribe_file, get_video_duration, NoAudioError
@@ -933,17 +934,22 @@ async def api_batch_process(project_id: int, req: BatchRequest, background_tasks
     if to_transcribe:
         background_tasks.add_task(run_batch_analysis, to_transcribe, project_id)
 
-    # 2. Done/silent clips missing scenes — queue scene-only jobs to fill thumbnails.
-    #    Skip clips whose file is missing on disk (can't extract a thumbnail) and
-    #    clips that already have scenes (their poster is backfilled at startup).
+    # 2. Done/silent clips that aren't FULLY processed → (re)detect scenes + AI.
+    #    A clip needs work if it has no usable thumbnail OR no AI visual tags.
+    #    NB: a clip can have scene ROWS whose thumbnail_path is NULL (extraction
+    #    failed, e.g. the drive was unplugged) — has_scenes() is True but they
+    #    still need re-detection, so we check thumbnails + AI explicitly.
+    #    Skip clips whose file is missing on disk (can't read them).
     from fcpxml import _resolve_actual_path
     to_scene_only = []
     skipped_missing = 0
     for f in files:
         if f["status"] not in ("done", "silent"):
             continue
-        if await has_scenes(f["id"]):
-            continue
+        has_thumb = await has_scene_thumbnails(f["id"])
+        has_ai    = await has_scene_ai(f["id"])
+        if has_thumb and has_ai:
+            continue                      # fully processed — nothing to do
         real = _resolve_actual_path(f["path"])
         if not real or not os.path.exists(real):
             skipped_missing += 1
@@ -962,12 +968,18 @@ async def api_batch_process(project_id: int, req: BatchRequest, background_tasks
         workers = int(settings.get("scene_concurrency") or default_workers)
         workers = max(1, min(8, workers))
         _sp = _scene_detect_params()
+        # Run AI vision in the same pass (unless offline / no Claude) so clips
+        # come out FULLY processed — thumbnail + AI tags — and leave Pending.
+        from analyzer import _anthropic_client, _claude_available
+        _use_ai = (not settings.get("offline_mode")) and bool(_anthropic_client or _claude_available)
+        if _use_ai:
+            workers = min(workers, 3)   # AI calls are slower; ease off parallelism
 
-        log.info(f"Queueing scene-only detection for {len(to_scene_only)} clips "
-                 f"missing thumbnails ({workers} at a time)")
+        log.info(f"Queueing scene (re)detection for {len(to_scene_only)} clips "
+                 f"(AI={'on' if _use_ai else 'off'}, {workers} at a time)")
         job_progress["__scene_backfill__"] = {
             "running": True, "done": 0, "total": len(to_scene_only),
-            "skipped_missing": skipped_missing, "workers": workers,
+            "skipped_missing": skipped_missing, "workers": workers, "ai": _use_ai,
         }
 
         async def _scene_only_runner():
@@ -990,7 +1002,8 @@ async def api_batch_process(project_id: int, req: BatchRequest, background_tasks
                         return
                     job_progress[fid] = {
                         "status": "transcribed", "progress": 70,
-                        "stage": "Detecting scenes…", "filename": f["filename"],
+                        "stage": "Detecting scenes + AI…" if _use_ai else "Detecting scenes…",
+                        "filename": f["filename"],
                     }
                     try:
                         real_path = _resolve_actual_path(f["path"])
@@ -998,7 +1011,7 @@ async def api_batch_process(project_id: int, req: BatchRequest, background_tasks
                         scenes = await loop.run_in_executor(
                             pool,
                             lambda fi=fid, p=real_path, t=tx_segs: detect_scenes(
-                                fi, p, transcript_segments=t, **_sp),
+                                fi, p, transcript_segments=t, use_ai=_use_ai, **_sp),
                         )
                         if scenes:
                             await save_scenes(fid, scenes)
