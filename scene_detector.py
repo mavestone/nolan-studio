@@ -331,20 +331,28 @@ def detect_scenes_sampled(
     path: str,
     transcript_segments: list[dict] | None = None,
     use_ai: bool = False,
-    interval_seconds: float = 10.0,
-    max_samples: int = 12,
+    broll_interval: float = 6.0,
+    aroll_interval: float = 15.0,
+    max_samples: int = 20,
 ) -> list[dict]:
     """
-    Sample a clip at fixed TIME intervals instead of decoding every frame to
-    find cuts. This is the right model for RAW camera footage, where each file
-    is one continuous take with no internal cuts — so there's nothing to detect.
+    Sample a clip at TIME intervals instead of decoding every frame to find
+    cuts. Right model for RAW camera footage — each file is one continuous take
+    with no internal cuts, so there's nothing to detect.
 
-    Instead of a ~35s full-frame decode, we seek directly to a handful of
-    timestamps (~0.8s each via keyframe seek) and grab + classify a thumbnail
-    at each. A 44s clip → ~5 samples → ~4s. Roughly 8–10× faster.
+    CONTENT-ADAPTIVE density (optimised for visual search):
+      • B-roll stretches (no dialogue) → sampled DENSELY (every broll_interval s)
+        because that's where the searchable variety lives — objects, locations,
+        action. We want a tag on every distinct thing in frame.
+      • A-roll stretches (dialogue) → sampled SPARSELY (every aroll_interval s)
+        because it's usually a near-static talking head; the transcript already
+        carries the meaning, so dense visual tags would just be duplicates.
 
-    Each sample becomes a "scene" spanning its interval, so the rest of the app
+    We walk the timeline and choose each step based on whether the current
+    moment has speech. Each sample becomes a "scene" so the rest of the app
     (thumbnails, classification, A/B-roll, AI tags) works unchanged.
+    Seeks are ~0.8s each — a 44s clip → ~5 samples → ~4s. ~8–10× faster than
+    full-frame cut detection.
     """
     try:
         thumb_dir = THUMBNAILS_DIR / str(file_id)
@@ -353,14 +361,36 @@ def detect_scenes_sampled(
         dur = _probe_duration(path)
         transcript_segments = transcript_segments or []
 
-        # Decide how many evenly-spaced samples to take
+        # Build content-adaptive sample windows by walking the timeline.
         if dur <= 0:
             boundaries = [(0.0, 0.0)]            # unknown duration → 1 sample at start
         else:
-            import math
-            n = max(1, min(max_samples, math.ceil(dur / max(1.0, interval_seconds))))
-            seg = dur / n
-            boundaries = [(i * seg, (i + 1) * seg) for i in range(n)]
+            # 1) Full candidate list (uncapped) — denser where there's no speech.
+            starts = []
+            t = 0.0
+            while t < dur - 0.5:
+                has_speech = _scene_has_dialogue(t, t + 1.0, transcript_segments)
+                step = aroll_interval if has_speech else broll_interval
+                starts.append(t)
+                t += step
+            if not starts:
+                starts = [0.0]
+
+            # 2) If over the cap, evenly thin the list so samples still span the
+            #    WHOLE clip (don't just sample the front and cut off). Because the
+            #    candidate list is denser in b-roll regions, even thinning keeps
+            #    proportionally more b-roll samples.
+            if len(starts) > max_samples:
+                thinned = [starts[round(i * (len(starts) - 1) / (max_samples - 1))]
+                           for i in range(max_samples)]
+                # dedupe while preserving order
+                seen = set(); starts = [s for s in thinned if not (s in seen or seen.add(s))]
+
+            # 3) Contiguous windows: each sample spans up to the next sample.
+            boundaries = []
+            for i, s in enumerate(starts):
+                e = starts[i + 1] if i + 1 < len(starts) else dur
+                boundaries.append((s, e))
 
         scenes = []
         for i, (start_s, end_s) in enumerate(boundaries):
@@ -415,24 +445,27 @@ def detect_scenes(
     threshold: float = 2.0,
     transcript_segments: list[dict] | None = None,
     use_ai: bool = False,
-    sample_interval: float | None = None,
-    max_samples: int = 12,
+    sampled: bool = True,
+    broll_interval: float = 6.0,
+    aroll_interval: float = 15.0,
+    max_samples: int = 20,
 ) -> list[dict]:
     """
     Detect scenes + classify each one.
 
-    sample_interval: if set (> 0), use FAST time-interval sampling (right for
-        RAW footage — see detect_scenes_sampled). If None, fall back to
-        full-frame cut detection with PySceneDetect (for edited clips).
+    sampled: if True (default), use content-adaptive time-interval sampling —
+        right for RAW footage (see detect_scenes_sampled). If False, fall back
+        to full-frame cut detection with PySceneDetect (for edited clips).
 
     transcript_segments: list of {start, end, text} — used to set roll_type
                          (a_roll if speech overlaps the scene, else b_roll)
     use_ai: if True, also run Claude vision per scene (only if claude_available)
     """
-    if sample_interval and sample_interval > 0:
+    if sampled:
         return detect_scenes_sampled(
-            file_id, path, transcript_segments=transcript_segments,
-            use_ai=use_ai, interval_seconds=sample_interval, max_samples=max_samples,
+            file_id, path, transcript_segments=transcript_segments, use_ai=use_ai,
+            broll_interval=broll_interval, aroll_interval=aroll_interval,
+            max_samples=max_samples,
         )
     try:
         from scenedetect import open_video, SceneManager
