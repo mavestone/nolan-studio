@@ -847,6 +847,7 @@ function openConsole() {
   d.classList.add('open');
   consoleOpen = true;
   document.getElementById('console-toggle-btn').textContent = '▾';
+  document.getElementById('console-btn')?.classList.add('is-active');
   startConsolePolling();
 }
 function closeConsole() {
@@ -855,6 +856,7 @@ function closeConsole() {
   d.classList.remove('open');   // collapses to peeking header
   consoleOpen = false;
   document.getElementById('console-toggle-btn').textContent = '▴';
+  document.getElementById('console-btn')?.classList.remove('is-active');
 }
 // Show the collapsed console header in project view; fully hide on home
 function showConsoleTab()  { document.getElementById('console-drawer')?.classList.remove('hidden'); }

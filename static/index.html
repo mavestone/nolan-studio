@@ -97,6 +97,10 @@
         </svg>
       </button>
 
+      <button class="btn btn-ghost btn-icon-text" id="console-btn" onclick="toggleConsole(event)" title="Activity console — see what Nolan is doing">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style="margin-right:4px"><rect x="0.6" y="1.4" width="10.8" height="9.2" rx="1.5" stroke="currentColor" stroke-width="1.1"/><path d="M2.6 4.2l1.8 1.6-1.8 1.6M5.6 7.8h3.2" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Console
+      </button>
       <button class="btn btn-ghost btn-icon-text" id="export-csv-btn" onclick="exportCSV()" title="Download all transcripts as CSV">
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v7M3 6l3 3 3-3M1 10h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
         CSV
@@ -451,6 +455,6 @@
   <!-- ══ TOAST ══ -->
   <div id="completion-toast" class="completion-toast"></div>
 
-  <script src="/static/app.js?v=51"></script>
+  <script src="/static/app.js?v=52"></script>
 </body>
 </html>

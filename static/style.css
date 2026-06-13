@@ -254,6 +254,11 @@ html, body {
 
 .btn-lg { padding: 9px 20px; font-size: 12px; min-height: 36px; }
 .btn-icon-text { gap: 4px; }
+.btn.is-active {
+  background: rgba(56,189,248,0.14);
+  border-color: rgba(56,189,248,0.5);
+  color: #9fdcfb;
+}
 
 .text-btn {
   background: none;
