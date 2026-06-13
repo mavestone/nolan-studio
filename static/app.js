@@ -12,6 +12,7 @@ let chatHistory        = [];
 let chatBusy           = false;
 let scenesCache        = {};   // fileId → [{scene_num, start_time, thumbnail_path}]
 let activeFilter       = 'all';
+let selectedFps        = new Set();   // frame-rate filter; empty = show all
 let offlineMode        = false;
 let claudeAvailable    = true;
 let viewMode           = 'list';    // 'list' or 'gallery'
@@ -958,6 +959,7 @@ async function loadClips() {
   ]);
   allFiles = files;
   allJobs  = jobs;
+  renderFpsFilter();
   renderClipGrid();
   updateNowProcessing();
 }
@@ -1161,6 +1163,61 @@ function isPending(f, jobs) {
   return !isFullyProcessed(f, jobs);
 }
 
+// ── Frame-rate helpers ──
+// Map a raw fps float to a clean editor-facing label (handles NTSC fractions).
+function fpsLabel(fps) {
+  if (!fps || fps <= 0) return null;
+  const known = [
+    [23.976, '23.976'], [24, '24'], [25, '25'], [29.97, '29.97'], [30, '30'],
+    [48, '48'], [50, '50'], [59.94, '59.94'], [60, '60'],
+    [100, '100'], [119.88, '119.88'], [120, '120'],
+  ];
+  for (const [v, l] of known) if (Math.abs(fps - v) < 0.06) return l;
+  return Math.abs(fps - Math.round(fps)) < 0.01 ? String(Math.round(fps)) : fps.toFixed(2);
+}
+
+// Build the toggle pills from the distinct frame rates present in the project.
+function renderFpsFilter() {
+  const bar = document.getElementById('fps-filter');
+  if (!bar) return;
+  // Count clips per fps label
+  const counts = {};
+  for (const f of allFiles) {
+    const l = fpsLabel(f.frame_rate);
+    if (l) counts[l] = (counts[l] || 0) + 1;
+  }
+  const labels = Object.keys(counts).sort((a, b) => parseFloat(a) - parseFloat(b));
+
+  // Only worth showing if there's more than one frame rate in the project
+  if (labels.length < 2) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+
+  // Drop any selected labels that no longer exist
+  for (const l of [...selectedFps]) if (!counts[l]) selectedFps.delete(l);
+
+  bar.style.display = 'flex';
+  const allActive = selectedFps.size === 0;
+  let html = `<span class="fps-filter-label">FPS</span>`;
+  html += `<button class="fps-pill ${allActive ? 'active' : ''}" onclick="setFpsFilter(null)">All</button>`;
+  for (const l of labels) {
+    const on = selectedFps.has(l);
+    html += `<button class="fps-pill ${on ? 'active' : ''}" onclick="toggleFps('${l}')">`
+          + `${l}<span class="fps-pill-n">${counts[l]}</span></button>`;
+  }
+  bar.innerHTML = html;
+}
+
+function toggleFps(label) {
+  if (selectedFps.has(label)) selectedFps.delete(label);
+  else selectedFps.add(label);
+  renderFpsFilter();
+  renderClipGrid();
+}
+function setFpsFilter(label) {
+  selectedFps.clear();            // null/"All" → clear (show everything)
+  renderFpsFilter();
+  renderClipGrid();
+}
+
 function renderClipGrid(files = allFiles, jobs = allJobs) {
   const el = document.getElementById('clip-grid');
 
@@ -1170,6 +1227,11 @@ function renderClipGrid(files = allFiles, jobs = allJobs) {
   let filtered = files;
   if (activeFilter === 'done')    filtered = files.filter(f => isFullyProcessed(f, jobs));
   if (activeFilter === 'pending') filtered = files.filter(f => isPending(f, jobs));
+
+  // Frame-rate filter (orthogonal to the status tabs)
+  if (selectedFps.size > 0) {
+    filtered = filtered.filter(f => selectedFps.has(fpsLabel(f.frame_rate)));
+  }
 
   const countEl = document.getElementById('pool-count');
   if (countEl) countEl.textContent = filtered.length ? `${filtered.length} clips` : '';
@@ -1295,6 +1357,7 @@ function clipRowHtml(f, liveStatus) {
         ${rollChip}
         ${sizeChip}
         ${settingChip}
+        ${fpsLabel(f.frame_rate) ? `<span class="clip-row-fps">${fpsLabel(f.frame_rate)}</span>` : ''}
         ${f.duration_seconds ? `<span class="clip-row-duration">${formatDuration(f.duration_seconds)}</span>` : ''}
       </div>
     </div>`;

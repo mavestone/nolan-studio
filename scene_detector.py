@@ -348,6 +348,29 @@ def _probe_duration(path: str) -> float:
         return 0.0
 
 
+def probe_frame_rate(path: str) -> float:
+    """
+    Return the clip's frame rate as a float (e.g. 29.97, 59.94, 119.88).
+    Reads the video stream's r_frame_rate ("30000/1001") and evaluates it.
+    Metadata-only ffprobe — no decode, cheap even on slow drives. 0.0 on failure.
+    """
+    try:
+        out = subprocess.run(
+            [_FFPROBE, "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=r_frame_rate",
+             "-of", "default=noprint_wrappers=1:nokey=1", path],
+            capture_output=True, text=True, timeout=30,
+        ).stdout.strip()
+        if "/" in out:
+            num, den = out.split("/", 1)
+            den = float(den)
+            return round(float(num) / den, 3) if den else 0.0
+        return round(float(out), 3) if out else 0.0
+    except Exception as e:
+        log.debug(f"[probe_frame_rate] {e}")
+        return 0.0
+
+
 # ── FAST sampled detection (for RAW footage — no internal cuts) ──────────────────
 
 def detect_scenes_sampled(

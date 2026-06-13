@@ -73,11 +73,12 @@ from database import (
     save_scenes, get_scenes, has_scenes, has_scene_thumbnails, has_scene_ai,
     save_poster_path, get_project_poster_paths,
     search_project_scenes, update_file_scene_summary, update_scene_classification,
+    update_file_frame_rate,
 )
 from transcriber import scan_folder, transcribe_file, get_video_duration, NoAudioError
 from analyzer import analyze_project, chat_about_project, select_narrative_clips
 from fcpxml import generate_fcpxml
-from scene_detector import detect_scenes, extract_clip_poster, classify_shot_with_claude
+from scene_detector import detect_scenes, extract_clip_poster, classify_shot_with_claude, probe_frame_rate
 
 job_progress: dict[int | str, dict] = {}
 _stop_requested = False
@@ -218,6 +219,51 @@ async def purge_orphaned_rows():
         except Exception:
             pass
     log.info(f"Orphan purge: done ({len(orphan_ids)} files removed)")
+
+
+async def backfill_frame_rates():
+    """
+    Probe frame rate for clips that don't have one yet (metadata-only ffprobe,
+    no decode). Runs a few in parallel. Guarded: once every on-disk clip has a
+    frame_rate, this is a no-op on subsequent boots.
+    """
+    import aiosqlite
+    from concurrent.futures import ThreadPoolExecutor
+    from database import DB_PATH
+
+    async with aiosqlite.connect(DB_PATH, timeout=10) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT id, path FROM files WHERE frame_rate IS NULL"
+        ) as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
+
+    todo = [r for r in rows if r["path"] and os.path.exists(r["path"])]
+    if not todo:
+        return
+
+    log.info(f"Frame rates: probing {len(todo)} clips…")
+    loop = asyncio.get_event_loop()
+    sem  = asyncio.Semaphore(4)
+    pool = ThreadPoolExecutor(max_workers=4)
+    done = 0
+
+    async def _one(r):
+        nonlocal done
+        async with sem:
+            try:
+                fps = await loop.run_in_executor(pool, lambda p=r["path"]: probe_frame_rate(p))
+                if fps:
+                    await update_file_frame_rate(r["id"], fps)
+            except Exception as e:
+                log.debug(f"[backfill_frame_rates] {r['id']}: {e}")
+            done += 1
+
+    try:
+        await asyncio.gather(*[_one(r) for r in todo])
+    finally:
+        pool.shutdown(wait=False)
+    log.info(f"Frame rates: done ({done} clips probed)")
 
 
 async def backfill_missing_posters():
@@ -459,6 +505,7 @@ async def _startup_maintenance():
         await cleanup_db_hidden_and_dupes()
         await migrate_error_clips_to_silent()
         await backfill_missing_posters()
+        await backfill_frame_rates()        # probe fps for clips that lack it
         await migrate_dialogue_tiers()      # a_roll/b_roll → no/dialogue/heavy
         await backfill_scene_classifications()
         await reclassify_all_scenes()       # guarded: only unclassified scenes
@@ -1016,6 +1063,10 @@ async def api_batch_process(project_id: int, req: BatchRequest, background_tasks
                     try:
                         real_path = _resolve_actual_path(f["path"])
                         tx_segs = await get_transcript(fid)
+                        # Capture frame rate (cheap metadata probe) while we're here
+                        fps = await loop.run_in_executor(pool, lambda p=real_path: probe_frame_rate(p))
+                        if fps:
+                            await update_file_frame_rate(fid, fps)
                         scenes = await loop.run_in_executor(
                             pool,
                             lambda fi=fid, p=real_path, t=tx_segs: detect_scenes(

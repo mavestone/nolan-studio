@@ -1378,6 +1378,62 @@ html, body {
   color: var(--text3);
 }
 
+.clip-row-fps {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: #7dd3fc;
+  border: 1px solid rgba(56,189,248,0.28);
+  border-radius: 3px;
+  padding: 1px 5px;
+  letter-spacing: 0.02em;
+}
+
+/* ── Frame-rate filter bar ── */
+.fps-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 7px 12px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+}
+.fps-filter-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--text3);
+  margin-right: 2px;
+}
+.fps-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--text2);
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 2px 9px;
+  cursor: pointer;
+  transition: all var(--t-fast);
+}
+.fps-pill:hover { border-color: var(--text3); color: var(--text); }
+.fps-pill.active {
+  background: rgba(56,189,248,0.14);
+  border-color: rgba(56,189,248,0.5);
+  color: #9fdcfb;
+}
+.fps-pill-n {
+  font-size: 8px;
+  color: var(--text3);
+  background: rgba(255,255,255,0.06);
+  border-radius: 8px;
+  padding: 0 4px;
+}
+.fps-pill.active .fps-pill-n { color: #9fdcfb; }
+
 .clip-row-scene-count {
   font-size: 9px;
   color: var(--text3);

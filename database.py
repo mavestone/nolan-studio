@@ -165,6 +165,8 @@ async def init_db():
             await db.execute("ALTER TABLE files ADD COLUMN primary_setting TEXT")
         if "primary_location" not in _cols:
             await db.execute("ALTER TABLE files ADD COLUMN primary_location TEXT")
+        if "frame_rate" not in _cols:
+            await db.execute("ALTER TABLE files ADD COLUMN frame_rate REAL")   # e.g. 29.97, 59.94, 119.88
         # Migrate: add project_id column to files if it doesn't exist yet
         async with db.execute("PRAGMA table_info(files)") as cur:
             columns = {row[1] for row in await cur.fetchall()}
@@ -785,6 +787,15 @@ async def search_project_scenes(project_id: int, q: str) -> list[dict]:
             d["tags"] = []
         result.append(d)
     return result
+
+
+async def update_file_frame_rate(file_id: int, fps: float | None) -> None:
+    """Store a clip's frame rate (e.g. 29.97)."""
+    if not fps or fps <= 0:
+        return
+    async with _db() as db:
+        await db.execute("UPDATE files SET frame_rate = ? WHERE id = ?", (round(fps, 3), file_id))
+        await db.commit()
 
 
 async def has_scenes(file_id: int) -> bool:

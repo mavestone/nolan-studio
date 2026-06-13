@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<style>
+  @page { size: A4; margin: 18mm 16mm 20mm 16mm; }
+  @page { @bottom-right { content: "Nolan — Developer Handoff"; font-size: 8px; color: #999; } }
+  * { box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body {
+    font-family: -apple-system, "Helvetica Neue", Arial, sans-serif;
+    font-size: 10.5px; line-height: 1.55; color: #1a1d24; margin: 0;
+  }
+  code, pre, .mono { font-family: "SF Mono", "Menlo", "Consolas", monospace; }
+
+  /* ── Cover ── */
+  .cover { height: 252mm; display: flex; flex-direction: column; justify-content: center; page-break-after: always; }
+  .cover .badge { font-size: 11px; letter-spacing: 3px; color: #c8841a; font-weight: 700; text-transform: uppercase; }
+  .cover h1 { font-size: 52px; margin: 8px 0 4px; letter-spacing: -1.5px; line-height: 1; }
+  .cover .sub { font-size: 17px; color: #555; font-weight: 400; margin-bottom: 28px; }
+  .cover .rule { height: 4px; width: 70px; background: #c8841a; margin: 0 0 28px; }
+  .cover .meta { font-size: 10.5px; color: #444; }
+  .cover .meta b { color: #1a1d24; }
+  .cover .tagline { margin-top: 34px; padding: 14px 18px; background: #f6f1e7; border-left: 4px solid #c8841a; font-size: 12px; color: #3a3a3a; }
+
+  h2 { font-size: 19px; margin: 0 0 4px; padding-top: 4px; letter-spacing: -0.3px; color: #14171d;
+       border-bottom: 2px solid #c8841a; padding-bottom: 5px; page-break-after: avoid; }
+  h2 .num { color: #c8841a; font-weight: 800; margin-right: 8px; }
+  h3 { font-size: 13px; margin: 16px 0 4px; color: #1f2937; page-break-after: avoid; }
+  h4 { font-size: 11px; margin: 11px 0 3px; color: #374151; page-break-after: avoid; text-transform: uppercase; letter-spacing: 0.5px; }
+  p { margin: 5px 0; }
+  ul, ol { margin: 4px 0 8px; padding-left: 18px; }
+  li { margin: 2px 0; }
+  .section { page-break-before: always; }
+
+  code { background: #f0ece4; color: #9a4d12; padding: 1px 4px; border-radius: 3px; font-size: 9.3px; }
+  pre { background: #1a1d24; color: #e6e6e6; padding: 11px 13px; border-radius: 6px; font-size: 8.6px;
+        line-height: 1.5; overflow: hidden; white-space: pre-wrap; word-break: break-word; margin: 7px 0;
+        page-break-inside: avoid; }
+  pre .c { color: #7a8290; }   /* comment */
+  pre .k { color: #d99a4e; }   /* keyword */
+  pre .s { color: #88c08a; }   /* string */
+
+  table { width: 100%; border-collapse: collapse; margin: 7px 0; font-size: 9.2px; page-break-inside: avoid; }
+  th { background: #2a2e38; color: #fff; text-align: left; padding: 5px 8px; font-weight: 600; font-size: 8.8px;
+       text-transform: uppercase; letter-spacing: 0.4px; }
+  td { padding: 4px 8px; border-bottom: 1px solid #e4e0d8; vertical-align: top; }
+  tr:nth-child(even) td { background: #faf8f4; }
+  td.mono, th.mono { font-family: "SF Mono", "Menlo", monospace; font-size: 8.6px; }
+
+  .callout { background: #fdf6ec; border: 1px solid #ecd9b6; border-left: 4px solid #d99a4e;
+             border-radius: 5px; padding: 8px 12px; margin: 9px 0; font-size: 9.6px; page-break-inside: avoid; }
+  .callout.warn { background: #fdeeee; border-color: #f0c0c0; border-left-color: #d9534f; }
+  .callout.tip  { background: #eef6ee; border-color: #c2dcc2; border-left-color: #4e9a4e; }
+  .callout b { color: #14171d; }
+  .callout .lbl { font-weight: 700; text-transform: uppercase; font-size: 8.2px; letter-spacing: 0.6px; color: #b9791a; }
+  .callout.warn .lbl { color: #c0392b; }
+  .callout.tip .lbl  { color: #3a803a; }
+
+  .toc { font-size: 11px; }
+  .toc div { padding: 5px 0; border-bottom: 1px dotted #d8d4cc; display: flex; }
+  .toc .n { color: #c8841a; font-weight: 800; width: 28px; }
+  .toc .t { flex: 1; }
+  .toc .d { color: #888; font-size: 9px; }
+
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .card { background: #faf8f4; border: 1px solid #e7e2d8; border-radius: 6px; padding: 9px 11px; page-break-inside: avoid; }
+  .card h4 { margin-top: 0; color: #c8841a; }
+  .small { font-size: 9px; color: #666; }
+  .pill { display: inline-block; background: #2a2e38; color: #fff; font-size: 8px; padding: 1px 6px;
+          border-radius: 10px; margin-right: 3px; font-family: monospace; }
+  .flow { font-family: monospace; font-size: 8.8px; background: #f6f3ee; border: 1px solid #e4ddd0;
+          border-radius: 6px; padding: 10px 12px; margin: 8px 0; line-height: 1.7; page-break-inside: avoid; }
+  .flow .arrow { color: #c8841a; font-weight: 700; }
+</style>
+</head>
+<body>
+
+<!-- ══════════════════ COVER ══════════════════ -->
+<div class="cover">
+  <div class="badge">Technical Handoff · Internal</div>
+  <h1>Nolan</h1>
+  <div class="sub">Documentary Footage Studio — Architecture &amp; Developer Guide</div>
+  <div class="rule"></div>
+  <div class="meta">
+    <p><b>Repository:</b> github.com/mavestone/nolan-studio</p>
+    <p><b>Platform:</b> macOS desktop app (local server + browser UI)</p>
+    <p><b>Stack:</b> Python 3.11 · FastAPI · SQLite · faster-whisper · PySceneDetect · Claude / Groq / Gemini</p>
+    <p><b>Codebase:</b> ~13,700 LOC · 7 Python modules · single-file SPA frontend</p>
+    <p><b>Document date:</b> 13 June 2026</p>
+  </div>
+  <div class="tagline">
+    Nolan ingests raw documentary footage, transcribes it locally, detects &amp; visually
+    tags scenes, and lets an editor <b>search by what's said and what's on screen</b> —
+    from the browser or a Telegram bot — then exports editorial cuts as FCPXML.
+  </div>
+</div>
+
+<!-- ══════════════════ TOC ══════════════════ -->
+<div class="section">
+<h2><span class="num">—</span>Contents</h2>
+<div class="toc">
+  <div><span class="n">1</span><span class="t">System Overview &amp; Tech Stack</span><span class="d">what it is, dependencies, entry point</span></div>
+  <div><span class="n">2</span><span class="t">Architecture</span><span class="d">processes, threads, data flow</span></div>
+  <div><span class="n">3</span><span class="t">Module Reference</span><span class="d">every .py file, what it owns</span></div>
+  <div><span class="n">4</span><span class="t">Data Model</span><span class="d">all 9 SQLite tables, columns, relations</span></div>
+  <div><span class="n">5</span><span class="t">The Processing Pipeline</span><span class="d">scan → transcribe → scene → AI → analysis</span></div>
+  <div><span class="n">6</span><span class="t">Scene Detection (deep dive)</span><span class="d">adaptive sampling, the performance story</span></div>
+  <div><span class="n">7</span><span class="t">The AI Layer</span><span class="d">4 backends, fallback chain, models</span></div>
+  <div><span class="n">8</span><span class="t">HTTP API Reference</span><span class="d">all 50+ endpoints grouped</span></div>
+  <div><span class="n">9</span><span class="t">Frontend</span><span class="d">single-file SPA, state, polling</span></div>
+  <div><span class="n">10</span><span class="t">Telegram Bot</span><span class="d">commands, capture-mode state</span></div>
+  <div><span class="n">11</span><span class="t">Narrative Cut → FCPXML</span><span class="d">AI clip selection, DaVinci export</span></div>
+  <div><span class="n">12</span><span class="t">Settings &amp; Configuration</span><span class="d">settings.json, .env keys</span></div>
+  <div><span class="n">13</span><span class="t">Deployment &amp; Packaging</span><span class="d">install.sh, .app launcher, updater</span></div>
+  <div><span class="n">14</span><span class="t">Known Gotchas &amp; Lessons</span><span class="d">the traps we hit, read this</span></div>
+</div>
+</div>
+
+<!-- ══════════════════ 1. OVERVIEW ══════════════════ -->
+<div class="section">
+<h2><span class="num">1</span>System Overview &amp; Tech Stack</h2>
+
+<p>Nolan is a <b>single-user macOS desktop application</b>. There is no cloud component — everything
+runs locally. A native Swift launcher (<code>Nolan.app</code>) starts a Python FastAPI server on
+<code>localhost:8765</code> and opens the default browser to it. The "app" is therefore a local
+web app; the browser is the UI, the Python process is the backend, and an SQLite file is the database.</p>
+
+<h3>1.1 What it does</h3>
+<ul>
+  <li><b>Ingest</b> — scans folders of <code>.mp4</code>/<code>.mov</code> raw camera footage.</li>
+  <li><b>Transcribe</b> — local Whisper (faster-whisper), fully offline, no API needed.</li>
+  <li><b>Scene-tag</b> — samples each clip, classifies shot size / angle, indoor-outdoor, dialogue density, and (via Claude vision) the concrete objects on screen.</li>
+  <li><b>Search</b> — by transcript text, by shot attributes, or by "vibe" (LLM-expanded semantic search). Available in-browser and via a Telegram bot.</li>
+  <li><b>Story analysis</b> — an LLM "story bible" (characters, themes, locations, arc) over the whole project.</li>
+  <li><b>Export</b> — AI-selected narrative cuts rendered to <b>FCPXML</b> for DaVinci Resolve / FCP.</li>
+</ul>
+
+<h3>1.2 Dependencies (pinned — <code>requirements.txt</code>)</h3>
+<table>
+  <tr><th>Layer</th><th>Package</th><th>Version</th><th>Role</th></tr>
+  <tr><td>Web</td><td class="mono">fastapi / uvicorn</td><td class="mono">0.115.12 / 0.34.2</td><td>HTTP server + ASGI</td></tr>
+  <tr><td>Web</td><td class="mono">starlette</td><td class="mono">&gt;=0.46,&lt;0.47</td><td>Pinned — 1.0 broke FastAPI compat</td></tr>
+  <tr><td>DB</td><td class="mono">aiosqlite</td><td class="mono">0.22.1</td><td>Async SQLite</td></tr>
+  <tr><td>ASR</td><td class="mono">faster-whisper / av</td><td class="mono">1.2.1 / 17.0.1</td><td>Local transcription (bundled decoder)</td></tr>
+  <tr><td>Vision</td><td class="mono">scenedetect</td><td class="mono">&gt;=0.6.5</td><td>Cut detection (fallback path only)</td></tr>
+  <tr><td>Vision</td><td class="mono">opencv-python-headless</td><td class="mono">&gt;=4.10,&lt;5</td><td>Heuristic shot classification</td></tr>
+  <tr><td>AI</td><td class="mono">anthropic / groq / google-genai</td><td class="mono">0.97 / 1.2 / 1.74</td><td>LLM + vision backends</td></tr>
+  <tr><td>Bot</td><td class="mono">python-telegram-bot[job-queue]</td><td class="mono">22.7</td><td>Telegram interface (polling)</td></tr>
+  <tr><td>Config</td><td class="mono">python-dotenv</td><td class="mono">1.1.0</td><td>.env loading</td></tr>
+</table>
+
+<div class="callout warn"><span class="lbl">External binary</span> &nbsp;<b>ffmpeg &amp; ffprobe</b> are required at runtime for
+thumbnail extraction and duration probing. They are <b>not</b> Python packages — installed via Homebrew by
+<code>install.sh</code>. See §14 for the PATH trap this causes in <code>.app</code> launches.</div>
+
+<h3>1.3 Entry point</h3>
+<pre><span class="c"># main.py — bottom of file</span>
+<span class="k">if</span> __name__ == <span class="s">"__main__"</span>:
+    uvicorn.run(app, host=<span class="s">"127.0.0.1"</span>, port=<span class="s">8765</span>)</pre>
+<p>Single worker, single process. All concurrency is async (asyncio) plus a thread pool for
+CPU/IO-bound work (transcription, ffmpeg). There is intentionally no multi-worker setup — the
+app is single-user and holds in-memory job state.</p>
+</div>
+
+<!-- ══════════════════ 2. ARCHITECTURE ══════════════════ -->
+<div class="section">
+<h2><span class="num">2</span>Architecture</h2>
+
+<div class="flow">
+  Nolan.app (Swift launcher)<br>
+  &nbsp;&nbsp;<span class="arrow">└─▶</span> spawns: python main.py &nbsp;(cwd = repo root, PATH patched)<br>
+  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="arrow">├─</span> FastAPI / uvicorn &nbsp;<span class="arrow">:8765</span><br>
+  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="arrow">├─</span> SQLite (footage.db, WAL mode)<br>
+  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="arrow">├─</span> ThreadPoolExecutor &nbsp;(whisper, ffmpeg, scene detect)<br>
+  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="arrow">└─</span> asyncio task: Telegram bot (long-poll)<br>
+  &nbsp;&nbsp;<span class="arrow">└─▶</span> opens browser <span class="arrow">→</span> static/index.html (SPA) <span class="arrow">⇄</span> /api/* (polling)
+</div>
+
+<h3>2.1 The three concurrency lanes</h3>
+<table>
+  <tr><th>Lane</th><th>What runs there</th><th>Why</th></tr>
+  <tr><td>asyncio event loop</td><td>All HTTP handlers, DB calls (aiosqlite), Telegram bot</td><td>IO-bound, cheap to interleave</td></tr>
+  <tr><td>ThreadPoolExecutor</td><td>Whisper transcription, ffmpeg subprocess, OpenCV, scene detect</td><td>CPU/blocking — released GIL means real parallelism</td></tr>
+  <tr><td>FastAPI BackgroundTasks</td><td>Batch process orchestration, scene backfill runner</td><td>Fire-and-forget after HTTP response</td></tr>
+</table>
+
+<h3>2.2 In-memory job state</h3>
+<p>There is a module-level dict <code>job_progress: dict[int|str, dict]</code> in <code>main.py</code> that is the
+single source of truth for live progress. The frontend polls <code>/api/jobs</code> every ~2.2s and reads it.
+Keys are either a <b>file_id</b> (per-clip progress) or a <b>sentinel string</b>:</p>
+<table>
+  <tr><th class="mono">Key</th><th>Meaning</th></tr>
+  <tr><td class="mono">&lt;int&gt;</td><td>Per-file progress: <code>{status, progress, stage, filename}</code></td></tr>
+  <tr><td class="mono">__scan__</td><td>Folder scan status</td></tr>
+  <tr><td class="mono">__scene_backfill__</td><td>Bulk scene (re)detection: <code>{running, done, total, workers, ai}</code></td></tr>
+  <tr><td class="mono">__reclassify__</td><td>OpenCV reclassification pass</td></tr>
+  <tr><td class="mono">reanalyze_&lt;pid&gt;</td><td>Project-wide AI vision re-run</td></tr>
+  <tr><td class="mono">__project_analysis__</td><td>Story-bible generation</td></tr>
+</table>
+<div class="callout warn"><span class="lbl">Consequence</span> &nbsp;Because job state is in-memory, a server restart loses live progress
+(the work itself is checkpointed in the DB). <code>reset_stuck_states()</code> runs at boot to revert any
+clip left mid-flight back to a clean status.</div>
+
+<h3>2.3 Activity log ring buffer</h3>
+<p>A custom <code>logging.Handler</code> (<code>_ActivityHandler</code>) mirrors every <code>nolan</code> log record into a
+600-entry <code>deque</code>. <code>GET /api/activity?since=&lt;seq&gt;</code> serves incremental lines to the in-app
+console drawer. This is how the UI shows "what it's doing" live.</p>
+</div>
+
+<!-- ══════════════════ 3. MODULES ══════════════════ -->
+<div class="section">
+<h2><span class="num">3</span>Module Reference</h2>
+<p>Seven Python modules + a three-file frontend. No package structure — flat repo, imported by name.</p>
+
+<table>
+  <tr><th>File</th><th>LOC</th><th>Owns</th></tr>
+  <tr><td class="mono">main.py</td><td>2457</td><td>FastAPI app, all routes, job orchestration, startup maintenance, settings</td></tr>
+  <tr><td class="mono">database.py</td><td>902</td><td>Schema + migrations, all SQL, the <code>_db()</code> WAL connection ctx-manager</td></tr>
+  <tr><td class="mono">telegram_bot.py</td><td>2051</td><td>Bot handlers, vibe/search/cut over chat, capture-mode state machine</td></tr>
+  <tr><td class="mono">analyzer.py</td><td>948</td><td>LLM abstraction (4 backends + fallback), story bible, cut selection, chat</td></tr>
+  <tr><td class="mono">scene_detector.py</td><td>634</td><td>Sampling + cut detection, OpenCV classifier, Claude vision, ffmpeg calls</td></tr>
+  <tr><td class="mono">fcpxml.py</td><td>392</td><td>FCPXML generation, SMPTE timecode read via ffprobe</td></tr>
+  <tr><td class="mono">transcriber.py</td><td>94</td><td>faster-whisper wrapper, folder scan, audio-stream check</td></tr>
+  <tr><td class="mono">static/app.js</td><td>2734</td><td>SPA: state, rendering, polling, all UI logic</td></tr>
+  <tr><td class="mono">static/style.css</td><td>3017</td><td>Styling (dark theme)</td></tr>
+  <tr><td class="mono">static/index.html</td><td>455</td><td>DOM skeleton, loads <code>app.js?v=N</code> (bump N to bust cache)</td></tr>
+</table>
+
+<div class="callout tip"><span class="lbl">Cache busting</span> &nbsp;The frontend is unbundled. After editing <code>app.js</code> or
+<code>style.css</code>, bump the <code>?v=NN</code> query string in <code>index.html</code> or the browser serves stale JS.</div>
+</div>
+
+<!-- ══════════════════ 4. DATA MODEL ══════════════════ -->
+<div class="section">
+<h2><span class="num">4</span>Data Model</h2>
+<p>SQLite at <code>footage.db</code> (repo root), opened in WAL mode with <code>busy_timeout=10000</code> and
+<code>foreign_keys=ON</code> via the shared <code>_db()</code> async context manager. Nine tables.</p>
+
+<h3>4.1 Tables</h3>
+<table>
+  <tr><th>Table</th><th>Key columns</th><th>Notes</th></tr>
+  <tr><td class="mono">projects</td><td>id, name, created_at</td><td>Top of the tree</td></tr>
+  <tr><td class="mono">project_folders</td><td>id, project_id→, path, last_scanned, files_found</td><td>Source dirs; <code>UNIQUE(project_id,path)</code></td></tr>
+  <tr><td class="mono">files</td><td>id, project_id→, path, filename, duration_seconds, status, +12 denorm cols</td><td>One row per clip. See 4.2</td></tr>
+  <tr><td class="mono">segments</td><td>id, file_id→, start_time, end_time, text</td><td>Transcript lines</td></tr>
+  <tr><td class="mono">scenes</td><td>id, file_id→, scene_num, start/end, thumbnail_path, +9 attr cols</td><td>Sampled "scenes". See 4.3</td></tr>
+  <tr><td class="mono">analysis</td><td>file_id→, story_value, summary, highlights, themes, characters, raw_json</td><td>Per-clip LLM analysis</td></tr>
+  <tr><td class="mono">project_analysis</td><td>project_id→, raw_json</td><td>Whole-project "story bible"</td></tr>
+  <tr><td class="mono">bible_batch_checkpoints</td><td>project_id→, batch_num, total_batches, summary</td><td>Resumable bible generation</td></tr>
+  <tr><td class="mono">chat_messages</td><td>id, project_id→, role, content, pinned</td><td>Per-project chat history</td></tr>
+</table>
+
+<h3>4.2 <code>files</code> — denormalized scene summary columns</h3>
+<p>Scene attributes are rolled up onto the file row for fast list sort/filter
+(<code>update_file_scene_summary()</code>):</p>
+<p class="mono small">poster_path · primary_shot_type · primary_shot_size · primary_roll_type ·
+primary_setting · primary_location · scene_tags(json)</p>
+<p><b>status</b> ∈ <code>pending · queued · transcribing · transcribed · analyzing · done · silent · error</code>.
+<code>silent</code> = no audio stream (b-roll); still gets scenes.</p>
+
+<h3>4.3 <code>scenes</code> — the searchable unit</h3>
+<table>
+  <tr><th class="mono">Column</th><th>Values</th><th>Set by</th></tr>
+  <tr><td class="mono">thumbnail_path</td><td>static/thumbnails/&lt;fid&gt;/NNNN.jpg</td><td>ffmpeg seek</td></tr>
+  <tr><td class="mono">shot_size</td><td>extreme_close_up · close_up · medium · full · wide · extreme_wide · aerial</td><td>OpenCV, refined by AI</td></tr>
+  <tr><td class="mono">shot_angle</td><td>eye_level · low · high · dutch · over_shoulder · pov</td><td>OpenCV / AI</td></tr>
+  <tr><td class="mono">roll_type</td><td>no_dialogue · dialogue · heavy_dialogue &nbsp;<span class="small">(legacy: a_roll/b_roll)</span></td><td>transcript word-density</td></tr>
+  <tr><td class="mono">setting</td><td>indoor · outdoor</td><td><b>AI only</b> (OpenCV too unreliable)</td></tr>
+  <tr><td class="mono">location</td><td>free text ("desert dune", "kitchen")</td><td>AI vision</td></tr>
+  <tr><td class="mono">description</td><td>one-sentence composition</td><td>AI vision</td></tr>
+  <tr><td class="mono">visual_content</td><td>comma list: "shoe, sand, hand, camel, water"</td><td>AI vision — <b>powers object search</b></td></tr>
+  <tr><td class="mono">ai_classified</td><td>0 / 1</td><td>1 once Claude vision ran</td></tr>
+</table>
+<div class="callout"><span class="lbl">"Fully processed"</span> &nbsp;A clip is considered done only when it has <b>at least one scene with a
+thumbnail AND at least one scene with visual_content</b> (<code>has_scene_thumbnails()</code> +
+<code>has_scene_ai()</code>). The Pending tab = anything short of that.</div>
+</div>
+
+<!-- ══════════════════ 5. PIPELINE ══════════════════ -->
+<div class="section">
+<h2><span class="num">5</span>The Processing Pipeline</h2>
+<p>Triggered by <code>POST /api/projects/{id}/process</code>. The handler partitions the project's clips
+into work queues, then returns immediately; work runs in background tasks.</p>
+
+<div class="flow">
+  <b>scan</b> (folder → file rows)<br>
+  &nbsp;&nbsp;<span class="arrow">▼</span><br>
+  <b>1. transcribe</b> &nbsp;clips not yet done &nbsp;<span class="small">(faster-whisper, threadpool)</span><br>
+  &nbsp;&nbsp;<span class="arrow">▼</span> per clip<br>
+  <b>2. scene detect</b> &nbsp;<span class="small">(sample → thumbnail → classify)</span><br>
+  &nbsp;&nbsp;<span class="arrow">▼</span> same pass when AI on<br>
+  <b>3. AI vision</b> &nbsp;<span class="small">(Claude Haiku per scene thumbnail → visual_content)</span><br>
+  &nbsp;&nbsp;<span class="arrow">▼</span> on demand<br>
+  <b>4. story bible</b> &nbsp;<span class="small">(batched LLM over all transcripts)</span>
+</div>
+
+<h3>5.1 Partitioning logic (the important part)</h3>
+<p>On Process, three buckets are computed:</p>
+<ol>
+  <li><b>to_transcribe</b> — status not in (done, transcribing, queued, silent).</li>
+  <li><b>to_scene_only</b> — done/silent clips that are <b>not fully processed</b> (missing thumbnail OR missing AI), <b>and on disk</b>. Missing-on-disk clips are counted and skipped (need relink).</li>
+  <li>Transcribed clips flow into batch analysis automatically.</li>
+</ol>
+
+<pre><span class="c"># Selection — checks usable data, NOT mere row existence</span>
+has_thumb = <span class="k">await</span> has_scene_thumbnails(f[<span class="s">"id"</span>])
+has_ai    = <span class="k">await</span> has_scene_ai(f[<span class="s">"id"</span>])
+<span class="k">if</span> has_thumb <span class="k">and</span> has_ai:        <span class="c"># fully processed → skip</span>
+    <span class="k">continue</span>
+real = _resolve_actual_path(f[<span class="s">"path"</span>])
+<span class="k">if</span> <span class="k">not</span> os.path.exists(real):     <span class="c"># missing on disk → skip + count</span>
+    skipped_missing += <span class="s">1</span>; <span class="k">continue</span>
+to_scene_only.append(f)</pre>
+
+<div class="callout warn"><span class="lbl">Historical bug — read it</span> &nbsp;The original check was <code>has_scenes()</code> (row exists). But a
+failed thumbnail extraction (drive unplugged) left empty scene rows, so <code>has_scenes()</code> was true and
+Process skipped them forever. Always gate on <b>usable data</b>, not row presence.</div>
+
+<h3>5.2 The scene backfill runner</h3>
+<p>Clips are processed concurrently via a dedicated <code>ThreadPoolExecutor</code> bounded by an
+<code>asyncio.Semaphore</code>. Worker count defaults to <code>CPU-1</code> (clamped 2–8), reduced to 3 when AI is
+on. Each clip: resolve path → load transcript → <code>detect_scenes(use_ai=...)</code> → <code>save_scenes</code> →
+<code>update_file_scene_summary</code> → set poster. Respects a global <code>_stop_requested</code> flag.</p>
+</div>
+
+<!-- ══════════════════ 6. SCENE DETECTION ══════════════════ -->
+<div class="section">
+<h2><span class="num">6</span>Scene Detection — Deep Dive</h2>
+<p>This subsystem went through the most iteration; the design reflects hard-won performance lessons
+on real 4K HEVC footage stored on a slow external drive.</p>
+
+<h3>6.1 Two modes</h3>
+<table>
+  <tr><th>Mode</th><th>Function</th><th>When</th></tr>
+  <tr><td><b>Sampling</b> (default)</td><td class="mono">detect_scenes_sampled()</td><td>Raw footage — single continuous takes, no internal cuts</td></tr>
+  <tr><td>Cut detection (fallback)</td><td class="mono">PySceneDetect AdaptiveDetector</td><td><code>scene_detect_mode:"cuts"</code> — edited clips</td></tr>
+</table>
+
+<h3>6.2 Why sampling, not cut detection</h3>
+<p>Raw camera clips have no cuts. Full-frame cut detection must <b>decode every frame</b> to confirm
+that — ~35s for a 44s 4K HEVC clip — purely wasted. Sampling instead <b>seeks</b> to a handful of
+timestamps (~0.8s each via keyframe seek) and grabs a thumbnail. <b>8–10× faster</b>; a 44s clip → 4.4s.</p>
+
+<table>
+  <tr><th>Approach (tested on real 4K HEVC)</th><th>Time/clip</th><th>Verdict</th></tr>
+  <tr><td>PySceneDetect full decode</td><td>~35s</td><td>Accurate but wasteful for raw</td></tr>
+  <tr><td>frame_skip on PySceneDetect</td><td>~35s</td><td>No gain — HEVC must decode ref frames</td></tr>
+  <tr><td>ffmpeg keyframe-only scene filter</td><td>~6s</td><td>Misses real cuts (68-scene clip → 0-2)</td></tr>
+  <tr><td><b>Time-interval seek sampling</b></td><td><b>~4s</b></td><td><b>Chosen</b> — right model for raw</td></tr>
+</table>
+
+<h3>6.3 Content-adaptive density (search-optimized)</h3>
+<p>Sampling density follows the transcript, because that's where visual variety is:</p>
+<ul>
+  <li><b>B-roll</b> (no dialogue) → dense (every <code>scene_broll_seconds</code>, default 6s) — objects/locations live here.</li>
+  <li><b>A-roll</b> (dialogue) → sparse (every <code>scene_aroll_seconds</code>, default 15s) — static talking head; transcript carries it.</li>
+  <li>Capped at <code>scene_max_samples</code> (20). When the cap binds on a long clip, samples are evenly thinned across the <b>whole</b> clip (not front-loaded), preserving coverage.</li>
+</ul>
+
+<h3>6.4 Per-sample classification stack</h3>
+<div class="flow">
+  thumbnail.jpg<br>
+  &nbsp;&nbsp;<span class="arrow">▼</span> <b>_classify_shot_opencv()</b> &nbsp;<span class="small">(Haar faces + HSV colour → shot_size, angle, tags)</span><br>
+  &nbsp;&nbsp;<span class="arrow">▼</span> if use_ai &amp; Claude available<br>
+  &nbsp;&nbsp;<b>classify_shot_with_claude()</b> &nbsp;<span class="small">(Haiku vision → setting, location, description, visual_content)</span><br>
+  &nbsp;&nbsp;<span class="arrow">▼</span><br>
+  roll_type set separately from transcript word-density (<b>_dialogue_level</b>)
+</div>
+<div class="callout"><span class="lbl">indoor/outdoor</span> &nbsp;The OpenCV colour heuristic is deliberately <b>not</b> trusted for setting — it's
+left null and only the AI vision pass writes it. Descriptive tags (desert/night/nature) still come from OpenCV.</div>
+
+<h3>6.5 AI vision call (cost-relevant)</h3>
+<p>One 320px JPEG thumbnail per scene → <b>Claude Haiku via the local Claude CLI (OAuth)</b>, not the
+metered API. Returns strict JSON. So vision cost is the user's Claude subscription, not per-token API spend.</p>
+</div>
+
+<!-- ══════════════════ 7. AI LAYER ══════════════════ -->
+<div class="section">
+<h2><span class="num">7</span>The AI Layer (<code>analyzer.py</code>)</h2>
+<p>All LLM access goes through a small set of <code>_try_*</code> functions with a defined fallback order.
+Each returns text or raises; callers try backends in sequence until one succeeds.</p>
+
+<h3>7.1 Backends &amp; models</h3>
+<table>
+  <tr><th>Backend</th><th class="mono">_try_*</th><th>Auth</th><th>Used for</th></tr>
+  <tr><td>Anthropic API</td><td class="mono">_try_anthropic_api</td><td>ANTHROPIC_API_KEY</td><td>Primary when key set</td></tr>
+  <tr><td>Claude CLI</td><td class="mono">_try_claude_cli</td><td>Desktop OAuth (no key)</td><td>Vision + fallback</td></tr>
+  <tr><td>Groq</td><td class="mono">_try_groq</td><td>GROQ_API_KEY</td><td>Fast text fallback</td></tr>
+  <tr><td>Gemini</td><td class="mono">_try_gemini</td><td>GEMINI_API_KEY</td><td>Optional</td></tr>
+</table>
+
+<h3>7.2 Model aliases</h3>
+<pre>CLAUDE_MODEL        = <span class="s">"claude-haiku-4-5"</span>     <span class="c"># default — fast/cheap</span>
+CLAUDE_SONNET_MODEL = <span class="s">"claude-sonnet-4-5"</span>    <span class="c"># deeper reasoning</span>
+CLAUDE_OPUS_MODEL   = <span class="s">"claude-opus-4-7"</span>      <span class="c"># top-tier</span>
+GROQ_MODEL          = <span class="s">"llama-3.3-70b-versatile"</span></pre>
+<p>User-facing names map <code>haiku|sonnet|opus|groq</code> → these IDs. The Telegram bot exposes
+<code>/model</code> to switch; the web UI has a model selector for analysis.</p>
+
+<h3>7.3 Key flows</h3>
+<table>
+  <tr><th>Function</th><th>Does</th></tr>
+  <tr><td class="mono">analyze_project()</td><td>Batches transcripts, generates per-clip + project "story bible"; checkpointed per batch so it resumes.</td></tr>
+  <tr><td class="mono">select_narrative_clips()</td><td>Given a theme + duration, picks clips/in-out points for a cut. Returns structured JSON.</td></tr>
+  <tr><td class="mono">chat_about_project()</td><td>Conversational Q&amp;A grounded in transcripts (web chat).</td></tr>
+  <tr><td class="mono">chat_transcripts_only()</td><td>Lean Telegram path: LLM query-expansion → wide transcript search → editorial answer + cited clips.</td></tr>
+</table>
+
+<div class="callout tip"><span class="lbl">Vibe search</span> &nbsp;Two-stage: stage 1 expands a "vibe" into spoken-language terms people actually
+say; stage 2 reads matched transcripts and selects by feel. Lives in <code>telegram_bot._vibe_search</code>.</div>
+</div>
+
+<!-- ══════════════════ 8. API ══════════════════ -->
+<div class="section">
+<h2><span class="num">8</span>HTTP API Reference</h2>
+<p>All under <code>/api</code>. Grouped by concern. Verbs as defined in <code>main.py</code>.</p>
+
+<h4>Projects &amp; folders</h4>
+<table>
+  <tr><td class="mono">POST /api/projects</td><td>create</td><td class="mono">GET /api/projects</td><td>list</td></tr>
+  <tr><td class="mono">DELETE /api/projects/{id}</td><td>delete (cascades)</td><td class="mono">GET /api/pick-folder</td><td>native folder picker (osascript)</td></tr>
+  <tr><td class="mono">POST /api/projects/{id}/folders</td><td>add folder</td><td class="mono">.../folders/{fid}/scan</td><td>scan for clips</td></tr>
+</table>
+
+<h4>Processing &amp; jobs</h4>
+<table>
+  <tr><td class="mono">POST /api/projects/{id}/process</td><td>run pipeline</td><td class="mono">POST /api/stop</td><td>cooperative stop</td></tr>
+  <tr><td class="mono">GET /api/jobs</td><td>all job_progress</td><td class="mono">GET /api/activity?since=</td><td>console log stream</td></tr>
+  <tr><td class="mono">GET /api/scan/status</td><td>scan progress</td><td class="mono">.../reanalyze-scenes</td><td>project-wide AI vision</td></tr>
+</table>
+
+<h4>Files, scenes, search</h4>
+<table>
+  <tr><td class="mono">GET /api/projects/{id}/files</td><td>clip list (+has_thumbnail/has_ai_detect)</td><td class="mono">GET /api/files/{id}</td><td>detail</td></tr>
+  <tr><td class="mono">GET /api/files/{id}/transcript</td><td>segments</td><td class="mono">GET /api/files/{id}/scenes</td><td>scenes</td></tr>
+  <tr><td class="mono">POST /api/files/{id}/detect-scenes</td><td>single-clip detect</td><td class="mono">.../classify-with-ai</td><td>single-clip AI</td></tr>
+  <tr><td class="mono">GET /api/search</td><td>transcript search</td><td class="mono">.../scenes/search</td><td>scene attr + visual search</td></tr>
+  <tr><td class="mono">POST /api/files/{id}/reveal</td><td>open in Finder</td><td class="mono">.../posters</td><td>project poster grid</td></tr>
+</table>
+
+<h4>Analysis, cut, chat, export</h4>
+<table>
+  <tr><td class="mono">POST /api/projects/{id}/analyse</td><td>story bible</td><td class="mono">GET .../analysis</td><td>fetch bible</td></tr>
+  <tr><td class="mono">POST /api/projects/{id}/narrative-cut</td><td>AI cut → FCPXML</td><td class="mono">GET .../latest.fcpxml</td><td>download</td></tr>
+  <tr><td class="mono">GET/POST /api/projects/{id}/chat</td><td>project chat</td><td class="mono">.../export/transcripts.csv</td><td>CSV</td></tr>
+  <tr><td class="mono">GET /api/projects/{id}/export</td><td>.nolanproj bundle</td><td class="mono">POST /api/projects/import</td><td>import bundle (+relink)</td></tr>
+</table>
+
+<h4>Settings &amp; admin</h4>
+<table>
+  <tr><td class="mono">GET /api/settings</td><td>read</td><td class="mono">PATCH /api/settings</td><td>update</td></tr>
+  <tr><td class="mono">PATCH /api/settings/api-keys</td><td>set keys (.env)</td><td class="mono">POST /api/projects/{id}/relink</td><td>relink footage paths</td></tr>
+  <tr><td class="mono">GET /api/admin/version</td><td>git HEAD vs origin</td><td class="mono">POST /api/admin/update</td><td>git pull + restart</td></tr>
+</table>
+</div>
+
+<!-- ══════════════════ 9. FRONTEND ══════════════════ -->
+<div class="section">
+<h2><span class="num">9</span>Frontend</h2>
+<p>A single-file SPA — no framework, no build step. <code>index.html</code> is a static DOM skeleton;
+<code>app.js</code> holds all logic; the server serves them from <code>/static</code>.</p>
+
+<h3>9.1 Core state (module-level globals in app.js)</h3>
+<p class="mono small">currentProjectId · activeFileId · allFiles[] · allJobs{} · pollTimer · activeFilter ·
+sortMode · viewMode · scenesCache{} · offlineMode</p>
+
+<h3>9.2 Polling model</h3>
+<p>While work is active, <code>startPolling()</code> hits <code>/api/projects/{id}/files</code> + <code>/api/jobs</code>
+every 2.2s and re-renders. Stops when no clip is active AND no background job (<code>__scene_backfill__</code>,
+<code>__reclassify__</code>) is running. The <b>activity console</b> separately polls <code>/api/activity</code> at 1s.</p>
+
+<h3>9.3 Clip status model</h3>
+<pre>isFullyProcessed = (status∈{done,silent}) && has_thumbnail && has_ai_detect
+isPending        = !isFullyProcessed
+<span class="c">// Tabs: All · Processed · Pending</span></pre>
+
+<h3>9.4 Key render functions</h3>
+<table>
+  <tr><th class="mono">Function</th><th>Renders</th></tr>
+  <tr><td class="mono">renderClipGrid()</td><td>main clip list (list/gallery, grouped by status)</td></tr>
+  <tr><td class="mono">sceneCardHtml()</td><td>scene thumbnails + visual-content tags</td></tr>
+  <tr><td class="mono">renderSearchResults()</td><td>transcript + scene matches</td></tr>
+  <tr><td class="mono">updateNowProcessing()</td><td>the bins-panel progress widget</td></tr>
+  <tr><td class="mono">pollConsole()</td><td>the activity drawer</td></tr>
+</table>
+</div>
+
+<!-- ══════════════════ 10. TELEGRAM ══════════════════ -->
+<div class="section">
+<h2><span class="num">10</span>Telegram Bot (<code>telegram_bot.py</code>)</h2>
+<p>Optional. Starts as an asyncio task at boot if <code>telegram_token</code> is set. Long-polling
+(<code>drop_pending_updates=True</code>). Lets the editor query footage from their phone.</p>
+
+<h3>10.1 Commands</h3>
+<p class="mono small">/start · /projects · /use &lt;id&gt; · /search &lt;q&gt; · /vibe &lt;feel&gt; · /scenes &lt;q&gt; ·
+/stats · /model &lt;name&gt; · /story · /characters · /themes · /summary · /locations ·
+/instructions · /relink</p>
+<p>Plain messages → AI chat over transcripts with tappable "Open in Finder" buttons for cited clips.</p>
+
+<h3>10.2 Capture-mode state machine</h3>
+<p>Two dicts track multi-message flows; <code>_clear_waiting(chat_id)</code> is called at the start of every
+command handler to prevent stuck states:</p>
+<table>
+  <tr><th class="mono">State</th><th>Meaning</th></tr>
+  <tr><td class="mono">_waiting_instructions[chat]</td><td>"add" or "set" — next message becomes a custom instruction</td></tr>
+  <tr><td class="mono">_waiting_relink[chat]</td><td>next message is a footage folder path to relink</td></tr>
+  <tr><td class="mono">_pending_cut[chat]</td><td>find→confirm→style→cut conversational flow</td></tr>
+</table>
+
+<h3>10.3 Access control</h3>
+<p><code>telegram_chat_ids</code> allow-list. First <code>/start</code> when the list is empty auto-registers
+that user (owner onboarding). Per-chat custom instructions are injected into LLM system prompts.</p>
+
+<div class="callout warn"><span class="lbl">Lesson</span> &nbsp;Several historical bugs came from "stuck capture mode" and a
+<code>chat_id</code> not being threaded into a helper. Always pass <code>chat_id</code> explicitly and clear
+capture state on every command.</div>
+</div>
+
+<!-- ══════════════════ 11. CUT ══════════════════ -->
+<div class="section">
+<h2><span class="num">11</span>Narrative Cut → FCPXML (<code>fcpxml.py</code>)</h2>
+<p>Turns a theme + duration into an editable timeline for DaVinci Resolve / Final Cut.</p>
+<div class="flow">
+  theme + duration<br>
+  &nbsp;<span class="arrow">▼</span> LLM query-expand → gather candidate clips (transcript + scene pools)<br>
+  &nbsp;<span class="arrow">▼</span> <b>select_narrative_clips()</b> → JSON {title, clips:[{filename,in,out}], note}<br>
+  &nbsp;<span class="arrow">▼</span> validate clips exist on disk<br>
+  &nbsp;<span class="arrow">▼</span> <b>generate_fcpxml()</b> → writes narrative_cuts/&lt;title&gt;_&lt;ts&gt;.fcpxml<br>
+  &nbsp;<span class="arrow">▼</span> served / sent via Telegram as a document
+</div>
+<p><code>_get_tc_info()</code> reads embedded SMPTE timecode, framerate and audio/video specs per source via
+<code>ffprobe</code> so the XML lines up with the original media in the NLE.</p>
+</div>
+
+<!-- ══════════════════ 12. SETTINGS ══════════════════ -->
+<div class="section">
+<h2><span class="num">12</span>Settings &amp; Configuration</h2>
+
+<h3>12.1 <code>settings.json</code> (repo root, gitignored)</h3>
+<table>
+  <tr><th class="mono">Key</th><th>Default</th><th>Effect</th></tr>
+  <tr><td class="mono">offline_mode</td><td>false</td><td>Disable all AI (transcription still local)</td></tr>
+  <tr><td class="mono">scene_detect_mode</td><td>"sampling"</td><td>"cuts" = PySceneDetect instead</td></tr>
+  <tr><td class="mono">scene_broll_seconds</td><td>6</td><td>B-roll sample interval</td></tr>
+  <tr><td class="mono">scene_aroll_seconds</td><td>15</td><td>A-roll sample interval</td></tr>
+  <tr><td class="mono">scene_max_samples</td><td>20</td><td>Cap samples per clip</td></tr>
+  <tr><td class="mono">scene_concurrency</td><td>CPU-1</td><td>Parallel scene workers (2–8)</td></tr>
+  <tr><td class="mono">telegram_token</td><td>—</td><td>Bot token (enables bot)</td></tr>
+  <tr><td class="mono">telegram_chat_ids</td><td>[]</td><td>Allow-list</td></tr>
+  <tr><td class="mono">telegram_default_project_id</td><td>—</td><td>Default project for bot</td></tr>
+  <tr><td class="mono">telegram_model</td><td>"haiku"</td><td>Bot LLM</td></tr>
+  <tr><td class="mono">telegram_instructions</td><td>{}</td><td>Per-chat custom rules</td></tr>
+</table>
+
+<h3>12.2 <code>.env</code> — API keys</h3>
+<p class="mono small">ANTHROPIC_API_KEY · GROQ_API_KEY · GEMINI_API_KEY</p>
+<p>All optional. With none set, Nolan falls back to the Claude CLI (OAuth) for AI and stays fully
+functional for transcription/scene detection offline.</p>
+</div>
+
+<!-- ══════════════════ 13. DEPLOYMENT ══════════════════ -->
+<div class="section">
+<h2><span class="num">13</span>Deployment &amp; Packaging</h2>
+
+<h3>13.1 Install</h3>
+<pre>git clone https://github.com/mavestone/nolan-studio.git
+cd nolan-studio &amp;&amp; ./install.sh</pre>
+<p><code>install.sh</code> ensures Homebrew, installs <b>ffmpeg</b>, ensures Python 3.11+, builds a venv,
+<code>pip install -r requirements.txt</code>, scaffolds <code>.env</code>, then builds <code>Nolan.app</code> via
+<code>make-app.sh</code> into /Applications (or chosen dir).</p>
+
+<h3>13.2 The app bundle</h3>
+<p><code>make-app.sh</code> wraps a compiled Swift launcher (<code>launcher/nolan-launcher</code>, universal
+binary). The launcher registers with WindowServer (dock dot, no infinite bounce), writes the repo path
+to <code>Resources/nolan-root.txt</code>, sets the subprocess <code>currentDirectoryURL</code> to the repo, spawns
+Python, waits for <code>:8765</code>, opens the browser, and tears down Python on quit (SIGTERM).</p>
+
+<h3>13.3 In-app updater</h3>
+<p><code>POST /api/admin/update</code> does <code>git pull</code> then triggers a self-restart
+(<code>open -a Nolan</code> detached + SIGTERM to self). The frontend polls <code>/api/admin/version</code>
+until the server returns, then reloads.</p>
+
+<h3>13.4 Startup maintenance (sequential, on every boot)</h3>
+<p><code>_startup_maintenance()</code> runs once at lifespan start, in order:</p>
+<ol class="small">
+  <li><code>purge_orphaned_rows()</code> — delete files/scenes from deleted projects + VACUUM</li>
+  <li><code>cleanup_db_hidden_and_dupes()</code> — drop ._ sidecars, smart-merge duplicate paths</li>
+  <li><code>migrate_error_clips_to_silent()</code></li>
+  <li><code>backfill_missing_posters()</code> — wire posters from existing scenes (cheap)</li>
+  <li><code>migrate_dialogue_tiers()</code> — a_roll/b_roll → 3-tier (no video decode)</li>
+  <li><code>reclassify_all_scenes()</code> — guarded: only never-classified scenes</li>
+</ol>
+</div>
+
+<!-- ══════════════════ 14. GOTCHAS ══════════════════ -->
+<div class="section">
+<h2><span class="num">14</span>Known Gotchas &amp; Lessons</h2>
+<p>The traps that cost real debugging time. New developers should read this section first.</p>
+
+<div class="callout warn"><span class="lbl">1 · ffmpeg PATH in .app</span> &nbsp;<code>.app</code> launches inherit
+<code>PATH=/usr/bin:/bin:/usr/sbin:/sbin</code> — <b>no Homebrew</b>. Bare <code>ffmpeg</code>/<code>ffprobe</code>
+calls fail silently (ffprobe→0.0 duration, ffmpeg→no thumbnails). Fixed two ways: <code>main.py</code> prepends
+<code>/opt/homebrew/bin</code> + <code>/usr/local/bin</code> to <code>os.environ["PATH"]</code> at startup, and
+<code>scene_detector</code> resolves the binaries to absolute paths. Transcription was unaffected because
+faster-whisper uses a bundled decoder, which masked the problem.</div>
+
+<div class="callout warn"><span class="lbl">2 · SQLite foreign keys default OFF</span> &nbsp;Deleting a project did
+<b>not</b> cascade — orphaned rows piled up (thousands). <code>_db()</code> now sets
+<code>PRAGMA foreign_keys=ON</code> and a startup purge sweeps legacy orphans.</div>
+
+<div class="callout warn"><span class="lbl">3 · "Has scenes" ≠ "processed"</span> &nbsp;Empty scene rows (failed
+thumbnail) made <code>has_scenes()</code> true so Process skipped clips forever. Gate on
+<code>has_scene_thumbnails()</code> + <code>has_scene_ai()</code>.</div>
+
+<div class="callout warn"><span class="lbl">4 · HEVC frame-skip is a no-op</span> &nbsp;You cannot cheaply sample
+"every Nth frame" of HEVC — inter-frame compression forces decoding reference frames anyway. Only
+keyframe-only decode is genuinely cheap. This is why interval <b>seeking</b> (not frame-skipping) is the
+fast path.</div>
+
+<div class="callout warn"><span class="lbl">5 · Import then re-scan duplicates</span> &nbsp;Importing a
+<code>.nolanproj</code> stores the sender's paths; a local re-scan creates a second row. The cleanup
+smart-merges: if the missing-path row has transcripts, its path is rewritten to the local one rather than
+deleted.</div>
+
+<div class="callout warn"><span class="lbl">6 · Folder picker permissions</span> &nbsp;Use bare
+<code>choose folder</code> osascript (StandardAdditions), <b>not</b> <code>tell application "Finder"</code>
+(needs Automation grant). On any picker failure the UI falls back to a manual path text-input.</div>
+
+<div class="callout warn"><span class="lbl">7 · Cache-busting</span> &nbsp;Unbundled frontend — bump
+<code>app.js?v=NN</code> in <code>index.html</code> after JS/CSS edits or users get stale code.</div>
+
+<div class="callout tip"><span class="lbl">Verifying changes</span> &nbsp;The server logs to
+<code>~/Library/Logs/Nolan/server.log</code> (rotated). Tail it, or watch the in-app Activity console, to see
+real-time pipeline output. <code>footage.db</code> can be inspected directly with the <code>sqlite3</code> CLI while
+the server runs (WAL mode allows concurrent reads).</div>
+
+<h3>14.1 Suggested first tasks for a new dev</h3>
+<ol>
+  <li>Run <code>./install.sh</code>, create a project, scan a small folder, hit Process — watch the Activity console.</li>
+  <li>Read <code>main.py</code> top-to-bottom: startup → lifespan → the <code>/process</code> handler.</li>
+  <li>Trace one clip through <code>detect_scenes_sampled()</code> in <code>scene_detector.py</code>.</li>
+  <li>Open <code>footage.db</code> in <code>sqlite3</code> and look at <code>scenes</code> for a processed clip.</li>
+</ol>
+
+<p style="margin-top:24px; padding-top:10px; border-top:1px solid #ddd; color:#888; font-size:9px;">
+End of document · Nolan Developer Handoff · generated from source at github.com/mavestone/nolan-studio
+</p>
+</div>
+
+</body>
+</html>
