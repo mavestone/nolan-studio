@@ -1671,13 +1671,14 @@ async def export_transcripts_csv(project_id: int):
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["filename", "duration_s", "start_time", "end_time", "text"])
+    writer.writerow(["filename", "filepath", "duration_s", "start_time", "end_time", "text"])
 
     for f in files:
         segs = await get_transcript(f["id"])
         for s in segs:
             writer.writerow([
                 f["filename"],
+                f["path"],
                 round(f["duration_seconds"] or 0, 2),
                 round(s["start_time"], 3),
                 round(s["end_time"],   3),
